@@ -1,0 +1,32 @@
+{
+  "name": "vantage-point",
+  "version": "0.175.0",
+  "description": "Vantage Point: a HUD above the Claude Code prompt, and the human queue, where agents queue asks and you rule yes/no with comments, from the desktop or your phone.",
+  "author": {
+    "name": "Leit-motif"
+  },
+  "repository": "https://github.com/Leit-motif/claude-vantage-point",
+  "license": "MIT",
+  "keywords": [
+    "human-in-the-loop",
+    "review",
+    "evals",
+    "labeling",
+    "mod"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "frontierScript": {
+      "type": "string",
+      "title": "Frontier script",
+      "description": "Path to agent-config's scripts/spec-frontier.mjs. Empty or missing: the frontier comes from this repo's issue labels.",
+      "default": ""
+    },
+    "readerGist": {
+      "type": "boolean",
+      "title": "Reader gist",
+      "description": "Ask agents to end a long reply with a short gist, which the RSVP Reader plays first. Off: no instruction is added to the system prompt, and the Reader plays the full reply.",
+      "default": true
+    }
+  }
+}

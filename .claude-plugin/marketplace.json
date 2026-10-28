@@ -1,0 +1,15 @@
+{
+  "name": "claude-vantage-point",
+  "description": "Vantage Point: a HUD above the Claude Code prompt, a decision deck, an RSVP reader, prompt-cache tracking, and the human queue.",
+  "owner": {
+    "name": "Leit-motif"
+  },
+  "plugins": [
+    {
+      "name": "vantage-point",
+      "source": "./",
+      "version": "0.175.0",
+      "description": "A HUD above the Claude Code prompt and a pane where you rule on what your agents ask."
+    }
+  ]
+}

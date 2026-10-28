@@ -1,0 +1,677 @@
+<title>Human Queue</title>
+<style>
+  /* Layout: a ruling console in Vantage's visual language. A quiet header (request
+     chips, a per-item progress track, counts in their state colors), the item card,
+     and an action dock pinned to the bottom edge. Color carries state only, as
+     outline and tint; surfaces stay neutral. Palette and faces from the Vantage
+     widget (dark) and its warm-paper light theme. */
+  :root {
+    --bg: #faf9f5;
+    --panel: #ffffff;
+    --raised: #f5f4ed;
+    --hover: #eeece4;
+    --ink: #1a1a1d;
+    --muted: #5e5d59;
+    --dim: #70706a;
+    --line: #e2dfd5;
+    --track: #e8e6dd;
+    --focus: #2c6bd6;
+    --yes: #237d4c;
+    --no: #c0392f;
+    --f-body: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --f-display: "Bahnschrift", "DIN Alternate", "Segoe UI Variable Display", system-ui, sans-serif;
+    --f-data: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
+    --radius: 10px;
+    --dock-h: 120px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121213; --panel: #1c1c1e; --raised: #242426; --hover: #2a2a2d; --ink: #efeff1; --muted: #a8a8ae;
+      --dim: #75757d; --line: #3a3a3d; --track: #2e2e31; --focus: #5b93f5; --yes: #54b87c; --no: #e86f6f;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121213; --panel: #1c1c1e; --raised: #242426; --hover: #2a2a2d; --ink: #efeff1; --muted: #a8a8ae;
+    --dim: #75757d; --line: #3a3a3d; --track: #2e2e31; --focus: #5b93f5; --yes: #54b87c; --no: #e86f6f;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 14px; line-height: 1.45;
+    padding-inline: 16px; padding-block: 0 calc(var(--dock-h) + 12px);
+  }
+  button, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  button:disabled { cursor: default; }
+  :focus-visible { outline: 1px solid var(--focus); outline-offset: 2px; }
+  .wrap { max-width: 760px; margin: 0 auto; }
+
+  kbd {
+    font-family: var(--f-data); font-size: 10px; line-height: 1; min-width: 16px; text-align: center;
+    padding: 2px 4px; border-radius: 4px; border: 1px solid var(--line); color: var(--dim); background: transparent;
+    display: inline-block;
+  }
+  @media (hover: none) { kbd, .legend { display: none !important; } }
+
+  /* Header */
+  .hud {
+    position: sticky; top: env(safe-area-inset-top, 0px); z-index: 2; background: var(--bg);
+    padding-block: 14px 10px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .hud-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .brand { font-family: var(--f-display); font-weight: 600; font-size: 17px; }
+  .status { margin-left: auto; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+  .tab {
+    display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 260px; border: 1px solid var(--line);
+    background: transparent; color: var(--muted); border-radius: 999px; padding: 3px 11px 3px 5px; font-size: 13px;
+  }
+  .tab:hover { background: var(--hover); }
+  .tab .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab[aria-pressed="true"] { border-color: var(--focus); color: var(--ink); }
+  .strip { display: flex; gap: 2px; height: 4px; }
+  .strip button { flex: 1 1 0; min-width: 3px; border: 0; padding: 0; border-radius: 2px; background: var(--track); }
+  .strip button.yes { background: var(--yes); }
+  .strip button.no { background: var(--no); }
+  .strip button.here { outline: 1px solid var(--focus); outline-offset: 2px; }
+  .tally { display: flex; gap: 14px; font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; flex-wrap: wrap; }
+  .tally b { color: var(--ink); font-weight: 600; }
+  .tally .y { color: var(--yes); }
+  .tally .n { color: var(--no); }
+
+  /* Stage */
+  .stage { display: flex; flex-direction: column; gap: 12px; padding-top: 4px; }
+  .request-title { font-family: var(--f-display); font-weight: 600; font-size: clamp(18px, 3.2vw, 22px); line-height: 1.2; margin: 0; text-wrap: balance; }
+  .meta { font-size: 12px; color: var(--dim); }
+  .ask { margin: 0; color: var(--muted); max-width: 65ch; white-space: pre-wrap; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 18px 18px;
+    display: flex; flex-direction: column; gap: 12px; min-height: 180px;
+  }
+  .card.yes { border-color: color-mix(in srgb, var(--yes) 45%, var(--line)); }
+  .card.no { border-color: color-mix(in srgb, var(--no) 45%, var(--line)); }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .label { font-family: var(--f-data); font-size: 11px; color: var(--dim); }
+  .pill { font-size: 12px; color: var(--dim); }
+  .pill.yes { color: var(--yes); }
+  .pill.no { color: var(--no); }
+  .body {
+    font-size: clamp(16px, 2.2vw, 18px); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere;
+    max-height: 46vh; overflow-y: auto; min-width: 0;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .card { transition: border-color .15s ease; }
+    .card.flash-yes { animation: flash-yes .35s ease; }
+    .card.flash-no { animation: flash-no .35s ease; }
+    @keyframes flash-yes { from { box-shadow: 0 0 0 2px color-mix(in srgb, var(--yes) 55%, transparent); } to { box-shadow: 0 0 0 0 transparent; } }
+    @keyframes flash-no { from { box-shadow: 0 0 0 2px color-mix(in srgb, var(--no) 55%, transparent); } to { box-shadow: 0 0 0 0 transparent; } }
+  }
+  .comment { display: flex; flex-direction: column; gap: 6px; }
+  .comment-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--dim); }
+  .comment-head label { display: inline-flex; gap: 7px; align-items: center; }
+  textarea {
+    width: 100%; min-height: 52px; resize: vertical; background: var(--raised); border: 1px solid var(--line);
+    border-radius: 8px; padding: 9px 12px; line-height: 1.4; font-size: 16px;
+  }
+  textarea::placeholder { color: var(--dim); }
+  textarea:focus { border-color: var(--focus); outline: none; }
+  .saved { font-size: 12px; color: var(--yes); min-height: 1em; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--dim); }
+  .legend span { display: inline-flex; gap: 4px; align-items: center; }
+
+  .notice {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px;
+    display: flex; flex-direction: column; gap: 8px; margin-top: 20px;
+  }
+  .notice h2 { margin: 0; font-family: var(--f-display); font-weight: 600; font-size: 18px; }
+  .notice p { margin: 0; color: var(--muted); max-width: 60ch; }
+  .finished { font-size: 12px; color: var(--dim); }
+  .finished summary { cursor: pointer; }
+  .finished ul { margin: 6px 0 0; padding-left: 18px; }
+
+  /* Dock */
+  .dock {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 3; background: var(--bg); border-top: 1px solid var(--line);
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+  .dock .wrap { display: flex; flex-direction: column; gap: 8px; }
+  .verdicts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .act {
+    min-height: 46px; border-radius: 8px; font-size: 15px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center; gap: 9px; border: 1px solid;
+  }
+  .act.no { color: var(--no); border-color: color-mix(in srgb, var(--no) 55%, var(--line)); background: color-mix(in srgb, var(--no) 7%, transparent); }
+  .act.yes { color: var(--yes); border-color: color-mix(in srgb, var(--yes) 55%, var(--line)); background: color-mix(in srgb, var(--yes) 7%, transparent); }
+  .act.no:hover { background: color-mix(in srgb, var(--no) 14%, transparent); }
+  .act.yes:hover { background: color-mix(in srgb, var(--yes) 14%, transparent); }
+  .act.chosen { border-width: 2px; }
+  .act:disabled { opacity: .4; }
+  .act[hidden] { display: none; }
+  .tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .tool {
+    display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: transparent;
+    color: var(--muted); border-radius: 6px; padding: 5px 9px; font-size: 13px;
+  }
+  .tool:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+  .tool:disabled { opacity: .4; }
+  .pos { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; padding-inline: 4px; }
+  .submit {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 7px; border-radius: 6px; padding: 5px 12px;
+    font-size: 13px; font-weight: 600; border: 1px solid var(--line); background: transparent; color: var(--dim);
+  }
+  .submit.ready { color: var(--focus); border-color: color-mix(in srgb, var(--focus) 60%, var(--line)); background: color-mix(in srgb, var(--focus) 8%, transparent); }
+  @media (max-width: 480px) {
+    .tools { flex-wrap: nowrap; gap: 5px; }
+    .tool { padding: 7px 9px; }
+    .tool .txt { display: none; }
+    .submit { padding: 7px 11px; white-space: nowrap; }
+  }
+
+  .toast {
+    position: fixed; left: 50%; transform: translateX(-50%); z-index: 4; bottom: calc(var(--dock-h) + 10px);
+    display: flex; align-items: center; gap: 12px; background: var(--raised); color: var(--ink); border: 1px solid var(--line);
+    padding: 7px 8px 7px 13px; border-radius: 8px; font-size: 13px; max-width: calc(100% - 32px);
+    box-shadow: 0 8px 28px -12px rgb(0 0 0 / .45);
+  }
+  .toast button {
+    background: transparent; color: var(--focus); border: 1px solid color-mix(in srgb, var(--focus) 60%, var(--line));
+    border-radius: 6px; padding: 3px 10px; font-weight: 600;
+  }
+</style>
+
+<div class="wrap">
+  <header class="hud">
+    <div class="hud-row">
+      <span class="brand">Human Queue</span>
+      <nav class="tabs" id="tabs" aria-label="Open requests"></nav>
+      <span class="status" id="status">Connecting…</span>
+    </div>
+    <div class="strip" id="strip" role="group" aria-label="Items"></div>
+    <div class="tally" id="tally"></div>
+  </header>
+
+  <main class="stage" id="stage">
+    <section class="notice" id="notice">
+      <h2 id="notice-title">Loading the queue</h2>
+      <p id="notice-text">Requests that agents leave for you appear here. Rule on each item with Yes or No, add a comment where it helps, then submit.</p>
+    </section>
+    <section id="request" class="stage" hidden>
+      <div>
+        <h1 class="request-title" id="title"></h1>
+        <div class="meta" id="meta"></div>
+      </div>
+      <p class="ask" id="ask"></p>
+      <article class="card" id="card">
+        <div class="card-head"><span class="label" id="label"></span><span class="pill" id="pill"></span></div>
+        <div class="body" id="body" tabindex="0"></div>
+      </article>
+      <div class="comment">
+        <div class="comment-head">
+          <label for="comment"><span id="comment-label">Comment</span> <kbd>Tab</kbd></label>
+          <span class="saved" id="saved" aria-live="polite"></span>
+        </div>
+        <textarea id="comment" rows="2" placeholder="Why yes or no, or what to change. Enter saves."></textarea>
+      </div>
+      <div class="legend">
+        <span><kbd>W</kbd> yes</span><span><kbd>S</kbd> no</span><span><kbd>A</kbd><kbd>D</kbd> move</span>
+        <span><kbd>Q</kbd> undo</span><span><kbd>E</kbd> redo</span><span><kbd>R</kbd> submit all</span>
+        <span>wheel moves · middle-click comments · M5 yes · M4 no</span>
+      </div>
+      <details class="finished" id="finished" hidden><summary id="finished-summary"></summary><ul id="finished-list"></ul></details>
+    </section>
+  </main>
+</div>
+
+<footer class="dock" id="dock" hidden>
+  <div class="wrap">
+    <div class="verdicts">
+      <button class="act no" id="no" type="button">✗ No <kbd>S</kbd></button>
+      <button class="act yes" id="yes" type="button">✓ Yes <kbd>W</kbd></button>
+    </div>
+    <div class="tools">
+      <button class="tool" id="prev" type="button" aria-label="Previous item">◀ <kbd>A</kbd></button>
+      <span class="pos" id="pos"></span>
+      <button class="tool" id="next" type="button" aria-label="Next item"><kbd>D</kbd> ▶</button>
+      <button class="tool" id="undo" type="button" aria-label="Undo">↶<span class="txt"> Undo</span> <kbd>Q</kbd></button>
+      <button class="tool" id="redo" type="button" aria-label="Redo">↷<span class="txt"> Redo</span> <kbd>E</kbd></button>
+      <button class="submit" id="submit" type="button">Submit all <kbd>R</kbd></button>
+    </div>
+  </div>
+</footer>
+<div class="toast" id="toast" role="status" hidden><span id="toast-text"></span><button id="toast-undo" type="button" hidden>Undo</button></div>
+
+<script id="hq-core">
+// The page's rules, free of the DOM so tests can run them: the keymap, when
+// Submit all is live, undo/redo, and which item a comment draft belongs to.
+var HQCore = (function () {
+  var KEYS = {
+    w: 'yes', arrowup: 'yes', s: 'no', arrowdown: 'no',
+    a: 'prev', arrowleft: 'prev', d: 'next', arrowright: 'next',
+    q: 'undo', e: 'redo', r: 'submit',
+  };
+  function keyAction(key) {
+    var k = String(key).toLowerCase();
+    if (/^[1-9]$/.test(k)) return 'request-' + k;
+    return KEYS[k] || null;
+  }
+  function counts(items) {
+    var yes = 0, no = 0;
+    items.forEach(function (i) { if (i.verdict === 'yes') yes++; else if (i.verdict === 'no') no++; });
+    return { yes: yes, no: no, unruled: items.length - yes - no, total: items.length };
+  }
+  /** Submit all is live on the last item, once every item is ruled, or for a plain ask. */
+  function canSubmit(items, index) {
+    var c = counts(items);
+    return c.total === 0 || index >= c.total || c.unruled === 0;
+  }
+  /** What R does: submit when live, else jump to the first unruled item. */
+  function submitPress(items, index) {
+    if (canSubmit(items, index)) return { submit: true };
+    for (var i = 0; i < items.length; i++) if (!items[i].verdict) return { jump: i + 1 };
+    return { jump: items.length };
+  }
+  function createHistory() {
+    var done = [], undone = [];
+    return {
+      push: function (entry) { done.push(entry); if (done.length > 100) done.shift(); undone.length = 0; },
+      undo: function () { var e = done.pop(); if (e) undone.push(e); return e || null; },
+      redo: function () { var e = undone.pop(); if (e) done.push(e); return e || null; },
+      /** Takes back one entry wherever it sits, as an undo of that entry alone. */
+      take: function (entry) {
+        var at = done.indexOf(entry);
+        if (at === -1) return null;
+        done.splice(at, 1); undone.push(entry); return entry;
+      },
+      sizes: function () { return { undo: done.length, redo: undone.length }; },
+      drop: function (prefix) {
+        done = done.filter(function (e) { return e.path.indexOf(prefix) !== 0; });
+        undone = undone.filter(function (e) { return e.path.indexOf(prefix) !== 0; });
+      },
+    };
+  }
+  /** A comment draft is bound to the item it was typed on, never to whatever shows next. */
+  function createDraft() {
+    var path = null, value = '', dirty = false;
+    return {
+      bind: function (p, v) { path = p; value = v || ''; dirty = false; },
+      type: function (v) { value = v; dirty = true; },
+      take: function () {
+        if (!dirty || path === null) return null;
+        dirty = false;
+        var t = value.trim();
+        return { path: path, value: t === '' ? null : t };
+      },
+      path: function () { return path; },
+      isDirty: function () { return dirty; },
+    };
+  }
+  function today(now) {
+    var d = new Date(now), p = function (n) { return String(n).padStart(2, '0'); };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+  return { keyAction: keyAction, counts: counts, canSubmit: canSubmit, submitPress: submitPress,
+    createHistory: createHistory, createDraft: createDraft, today: today };
+})();
+</script>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const el = (tag, attrs = {}, ...kids) => {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v === undefined || v === null || v === false) continue;
+      if (k.startsWith('on')) node.addEventListener(k.slice(2), v); else if (k === 'class') node.className = v; else node.setAttribute(k, v === true ? '' : v);
+    }
+    for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false) node.append(kid);
+    return node;
+  };
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  };
+
+  const S = {
+    db: null, canWrite: true, requests: [], items: [], rid: store.get('hq:rid') || null, index: 1,
+    loadingItems: false, error: null, shownPath: null,
+  };
+  const history = HQCore.createHistory();
+  const draft = HQCore.createDraft();
+  const queues = new Map();
+  let unsubItems = null;
+
+  // ---- writes ---------------------------------------------------------------
+  function write(path, fields) {
+    const prev = queues.get(path) || Promise.resolve();
+    const next = prev.catch(() => {}).then(() => S.db.doc(path).update(fields));
+    queues.set(path, next);
+    return next.catch(e => {
+      if (e && e.code === 'invalid_argument') { S.canWrite = false; paint(); toast('You can view this queue but not rule on it.'); }
+      else if (e && e.code === 'unavailable') toast('The queue is unreachable for a moment. Try again.');
+      else toast('That change was not saved.');
+      throw e;
+    });
+  }
+
+  // ---- toast ----------------------------------------------------------------
+  let toastTimer = null;
+  function toast(text, onUndo) {
+    $('toast-text').textContent = text;
+    const undo = $('toast-undo');
+    undo.hidden = !onUndo;
+    undo.onclick = onUndo ? () => { $('toast').hidden = true; onUndo(); } : null;
+    $('toast').hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { $('toast').hidden = true; }, onUndo ? 6000 : 2600);
+  }
+
+  // ---- selection ------------------------------------------------------------
+  const openRequests = () => S.requests.filter(r => r.status !== 'done');
+  const current = () => openRequests().find(r => r.rid === S.rid) || openRequests()[0] || null;
+  const item = () => S.items[S.index - 1] || null;
+
+  function flushDraft() {
+    const t = draft.take();
+    if (!t || !S.canWrite) return;
+    const field = t.path.includes('/items/') ? 'comment' : 'note';
+    write(t.path, { [field]: t.value }).then(flashSaved).catch(() => {});
+  }
+
+  function select(rid) {
+    if (rid === S.rid && unsubItems) return;
+    flushDraft();
+    S.rid = rid; store.set('hq:rid', rid || '');
+    S.items = []; S.index = 1; S.loadingItems = !!rid; S.shownPath = null;
+    if (unsubItems) { unsubItems(); unsubItems = null; }
+    if (!rid) { paint(); return; }
+    let first = true;
+    unsubItems = S.db.collection(`requests/${rid}/items`).orderBy('index').onSnapshot(snap => {
+      S.items = snap.docs.map(d => ({ path: `requests/${rid}/items/${d.id}`, ...d.data() }));
+      S.loadingItems = false;
+      if (first) { first = false; const u = S.items.findIndex(i => !i.verdict); S.index = u === -1 ? 1 : u + 1; }
+      S.index = Math.min(Math.max(1, S.index), Math.max(1, S.items.length));
+      paint();
+    }, e => { S.error = e && e.message; paint(); });
+    paint();
+  }
+
+  function go(index) {
+    const next = Math.min(Math.max(1, index), Math.max(1, S.items.length));
+    if (next === S.index) return;
+    flushDraft();
+    S.index = next;
+    paint();
+  }
+
+  // ---- actions --------------------------------------------------------------
+  function flash(verdict) {
+    const card = $('card');
+    card.classList.remove('flash-yes', 'flash-no');
+    void card.offsetWidth;
+    card.classList.add(`flash-${verdict}`);
+  }
+
+  function rule(verdict) {
+    const r = current(); if (!r || !S.canWrite) return;
+    const it = item();
+    if (!it) { if (verdict === 'yes') submit(); return; }
+    flushDraft();
+    const before = { verdict: it.verdict ?? null };
+    history.push({ path: it.path, before, after: { verdict } });
+    write(it.path, { verdict, ruledAt: Date.now() }).catch(() => {});
+    flash(verdict);
+    if (S.index < S.items.length) go(S.index + 1); else paint();
+  }
+
+  function applyHistory(entry, fields, verb) {
+    if (!entry) { toast(verb === 'undo' ? 'Nothing to undo.' : 'Nothing to redo.'); return; }
+    write(entry.path, fields).catch(() => {});
+    if (entry.kind === 'submit') {
+      const rid = entry.path.split('/')[1];
+      toast(verb === 'undo' ? 'Request reopened.' : 'Submitted again.');
+      if (verb === 'undo') select(rid);
+      return;
+    }
+    const at = S.items.findIndex(i => i.path === entry.path);
+    if (at !== -1) go(at + 1);
+    paint();
+  }
+  const undo = () => { const e = history.undo(); applyHistory(e, e && e.before, 'undo'); };
+  const redo = () => { const e = history.redo(); applyHistory(e, e && e.after, 'redo'); };
+
+  function submit() {
+    const r = current(); if (!r || !S.canWrite) return;
+    const press = HQCore.submitPress(S.items, S.index);
+    if (press.jump) {
+      const left = HQCore.counts(S.items).unruled;
+      go(press.jump);
+      toast(`${left} left to rule. Submit all lights up on the last item.`);
+      return;
+    }
+    flushDraft();
+    const path = `requests/${r.rid}`;
+    const after = { status: 'done', completed: HQCore.today(Date.now()), submittedAt: Date.now() };
+    const entry = { kind: 'submit', path, before: { status: 'open', completed: null, submittedAt: null }, after };
+    history.push(entry);
+    write(path, after).catch(() => {});
+    toast(`Submitted ${r.id}. The agent picks your rulings up from here.`, () => {
+      if (history.take(entry)) applyHistory(entry, entry.before, 'undo');
+    });
+  }
+
+  // ---- input ----------------------------------------------------------------
+  const box = $('comment');
+  let pauseTimer = null;
+  box.addEventListener('input', () => {
+    draft.type(box.value);
+    clearTimeout(pauseTimer); pauseTimer = setTimeout(flushDraft, 1200);
+  });
+  box.addEventListener('blur', () => { clearTimeout(pauseTimer); flushDraft(); });
+  box.addEventListener('keydown', e => {
+    if (e.key === 'Escape' || (e.key === 'Enter' && !e.shiftKey && !e.isComposing)) { e.preventDefault(); box.blur(); }
+  });
+
+  $('yes').addEventListener('click', () => rule('yes'));
+  $('no').addEventListener('click', () => rule('no'));
+  $('prev').addEventListener('click', () => go(S.index - 1));
+  $('next').addEventListener('click', () => go(S.index + 1));
+  $('undo').addEventListener('click', undo);
+  $('redo').addEventListener('click', redo);
+  $('submit').addEventListener('click', submit);
+
+  const actions = { yes: () => rule('yes'), no: () => rule('no'), prev: () => go(S.index - 1), next: () => go(S.index + 1), undo, redo, submit };
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.target === box) return;
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.tagName === 'BUTTON') return;
+    const action = HQCore.keyAction(e.key);
+    if (!action) return;
+    e.preventDefault();
+    if (action.startsWith('request-')) { const r = openRequests()[Number(action.slice(8)) - 1]; if (r) select(r.rid); return; }
+    actions[action]();
+  });
+
+  // Mouse thumb buttons: 4 (forward) yes, 3 (back) no. Middle click on the card comments.
+  document.addEventListener('mousedown', e => {
+    const onCard = e.button === 1 && e.target.closest && e.target.closest('.card');
+    if (e.button === 3 || e.button === 4 || onCard) e.preventDefault();
+  });
+  document.addEventListener('mouseup', e => {
+    if (e.target === box) return;
+    if (e.button === 4) { e.preventDefault(); rule('yes'); }
+    else if (e.button === 3) { e.preventDefault(); rule('no'); }
+  });
+  document.addEventListener('auxclick', e => {
+    if (e.button === 1 && e.target.closest && e.target.closest('.card')) { e.preventDefault(); box.focus(); }
+  });
+
+  let lastWheel = 0;
+  document.addEventListener('wheel', e => {
+    const card = e.target.closest && e.target.closest('.card');
+    if (!card) return;
+    const body = $('body');
+    const down = e.deltaY > 0;
+    if (body.scrollHeight > body.clientHeight + 1) {
+      const atEdge = down ? body.scrollTop + body.clientHeight >= body.scrollHeight - 1 : body.scrollTop <= 0;
+      if (!atEdge) return;
+    }
+    e.preventDefault();
+    const now = Date.now();
+    if (now - lastWheel < 180 || Math.abs(e.deltaY) < 4) return;
+    lastWheel = now; go(S.index + (down ? 1 : -1));
+  }, { passive: false });
+
+  // ---- paint: update the elements in place; nothing a click can land on is replaced mid-click
+  let savedTimer = null;
+  function flashSaved() {
+    $('saved').textContent = 'Saved';
+    clearTimeout(savedTimer); savedTimer = setTimeout(() => { $('saved').textContent = ''; }, 1400);
+  }
+  const setText = (node, text) => { if (node.textContent !== text) node.textContent = text; };
+
+  let tabsKey = '';
+  function paintTabs(open, r) {
+    const key = open.slice(0, 9).map(q => `${q.rid}|${q.id}|${q.title}`).join('\n');
+    if (key !== tabsKey) {
+      tabsKey = key;
+      $('tabs').replaceChildren(...(open.length < 2 ? [] : open.slice(0, 9).map((q, i) => el('button', {
+        class: 'tab', type: 'button', 'data-rid': q.rid, onclick: () => select(q.rid),
+      }, el('kbd', {}, String(i + 1)), el('span', { class: 't' }, `${q.id} ${q.title}`)))));
+    }
+    for (const b of $('tabs').children) b.setAttribute('aria-pressed', String(r && b.dataset.rid === r.rid));
+  }
+
+  function paintStrip() {
+    const strip = $('strip');
+    if (strip.children.length !== S.items.length) {
+      strip.replaceChildren(...S.items.map((_, i) => el('button', { type: 'button', onclick: () => go(i + 1) })));
+    }
+    S.items.forEach((it, i) => {
+      const b = strip.children[i];
+      const cls = `${it.verdict || ''}${i + 1 === S.index ? ' here' : ''}`;
+      if (b.className !== cls) b.className = cls;
+      b.setAttribute('aria-label', `Item ${it.heading}: ${it.verdict || 'not ruled'}`);
+      b.title = `${it.heading}`;
+    });
+  }
+
+  function paintFinished() {
+    const done = S.requests.filter(r => r.status === 'done');
+    $('finished').hidden = done.length === 0;
+    setText($('finished-summary'), `${done.length} finished`);
+    $('finished-list').replaceChildren(...done.slice(-12).reverse().map(r => el('li', {}, `${r.id} ${r.title}${r.completed ? ` · ${r.completed}` : ''}`)));
+  }
+
+  function showNotice(title, text) {
+    $('notice').hidden = false; $('request').hidden = true; $('dock').hidden = true;
+    setText($('notice-title'), title); setText($('notice-text'), text);
+    $('strip').replaceChildren(); setText($('tally'), '');
+  }
+
+  function paint() {
+    const open = openRequests();
+    setText($('status'), S.db ? (open.length ? `${open.length} open` : 'All clear') : $('status').textContent);
+    if (!S.db) return;
+    if (S.error) { showNotice('The queue could not load', `Reload the page to try again. (${S.error})`); return; }
+    const r = current();
+    paintTabs(open, r);
+    paintFinished();
+    if (!r) {
+      showNotice(S.requests.length ? 'Nothing is waiting on you' : 'Nothing queued yet',
+        S.requests.length
+          ? 'Every request here is submitted. Agents copy your rulings back into human-queue.md.'
+          : 'An agent adds a request here when it needs your judgment, such as 50 drafts to approve or reject. Ask one to queue something with the human-queue skill.');
+      $('finished').hidden = true;
+      return;
+    }
+    if (S.loadingItems) { showNotice(`${r.id} ${r.title}`, 'Loading items…'); return; }
+    $('notice').hidden = true; $('request').hidden = false; $('dock').hidden = false;
+
+    const it = item();
+    const c = HQCore.counts(S.items);
+    setText($('title'), `${r.id} ${r.title}`);
+    setText($('meta'), [r.source, r.opened ? `opened ${r.opened}` : null].filter(Boolean).join(' · '));
+    setText($('ask'), r.body || '');
+    $('ask').hidden = !r.body || !it;
+
+    // the comment box follows the item on screen; a draft stays with the item it was typed on
+    const path = it ? it.path : `requests/${r.rid}`;
+    const saved = (it ? it.comment : r.note) || '';
+    if (path !== S.shownPath) {
+      S.shownPath = path;
+      draft.bind(path, saved);
+      box.value = saved;
+    } else if (!draft.isDirty() && document.activeElement !== box && box.value !== saved) {
+      box.value = saved;
+    }
+    box.disabled = !S.canWrite;
+    setText($('comment-label'), it ? 'Comment' : 'Note for the agent');
+
+    if (it) {
+      paintStrip();
+      $('strip').hidden = false;
+      const tally = $('tally');
+      tally.replaceChildren(
+        el('span', {}, el('b', {}, `${S.index}`), ` of ${c.total}`),
+        el('span', { class: 'y' }, `✓ ${c.yes}`), el('span', { class: 'n' }, `✗ ${c.no}`), el('span', {}, `${c.unruled} left`));
+      setText($('label'), it.heading === String(it.index) ? `#${it.index}` : `#${it.index} · ${it.heading}`);
+      const v = it.verdict || '';
+      const pill = $('pill'); pill.className = `pill ${v}`; setText(pill, v === 'yes' ? '✓ Yes' : v === 'no' ? '✗ No' : 'Not ruled');
+      $('card').classList.toggle('yes', v === 'yes'); $('card').classList.toggle('no', v === 'no');
+      setText($('body'), it.body || '(empty item)');
+      $('no').hidden = false;
+      $('yes').firstChild.textContent = '✓ Yes ';
+      $('yes').classList.toggle('chosen', v === 'yes'); $('no').classList.toggle('chosen', v === 'no');
+      $('prev').hidden = false; $('next').hidden = false; $('pos').hidden = false;
+      $('prev').disabled = S.index <= 1; $('next').disabled = S.index >= c.total;
+      setText($('pos'), `${S.index} / ${c.total}`);
+    } else {
+      $('strip').replaceChildren(); $('strip').hidden = true; setText($('tally'), '');
+      setText($('label'), 'Plain ask'); const pill = $('pill'); pill.className = 'pill'; setText(pill, r.note ? 'Note left' : 'To do');
+      $('card').classList.remove('yes', 'no');
+      setText($('body'), r.body || 'Mark this done when it is handled.');
+      $('no').hidden = true;
+      $('yes').firstChild.textContent = '✓ Done ';
+      $('prev').hidden = true; $('next').hidden = true; $('pos').hidden = true;
+    }
+    $('yes').disabled = !S.canWrite; $('no').disabled = !S.canWrite;
+    const sizes = history.sizes();
+    $('undo').disabled = sizes.undo === 0; $('redo').disabled = sizes.redo === 0;
+    const live = HQCore.canSubmit(S.items, S.index);
+    const submitBtn = $('submit');
+    submitBtn.classList.toggle('ready', live);
+    submitBtn.disabled = !S.canWrite;
+    submitBtn.setAttribute('aria-disabled', String(!live));
+    submitBtn.title = live ? 'Send every ruling to the agent' : `${c.unruled} left; R jumps to the next unruled item`;
+    submitBtn.firstChild.textContent = it ? 'Submit all ' : 'Submit ';
+    $('submit').hidden = !it;
+  }
+
+  // the page leaves room under its content for the dock, at whatever height it lays out
+  if (window.ResizeObserver) {
+    new ResizeObserver(() => {
+      document.documentElement.style.setProperty('--dock-h', `${$('dock').offsetHeight}px`);
+    }).observe($('dock'));
+  }
+
+  // ---- boot -----------------------------------------------------------------
+  (async () => {
+    const db = window.claude ? await window.claude.use('db') : null;
+    if (!db) {
+      setText($('status'), 'Offline');
+      showNotice('Open this page on claude.ai', 'The queue lives in this artifact’s storage, which loads inside the Claude viewer. Open the artifact link on claude.ai or in the Claude app.');
+      return;
+    }
+    S.db = db;
+    const user = await window.claude.use('user');
+    if (user) { const can = await user.can('data.write'); if (can === false) S.canWrite = false; }
+    db.collection('requests').onSnapshot(snap => {
+      S.requests = snap.docs.map(d => ({ rid: d.id, ...d.data() }))
+        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || String(a.rid).localeCompare(String(b.rid)));
+      const r = current();
+      if ((r ? r.rid : null) !== S.rid || (r && !unsubItems)) select(r ? r.rid : null); else paint();
+    }, e => { S.error = e && e.message; paint(); });
+  })();
+})();
+</script>
