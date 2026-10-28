@@ -283,7 +283,8 @@ export const FORK_PROMPT =
 export function forkPrompt(wrap: WrapUpAsk | null): string {
   if (wrap === null) return FORK_PROMPT
   return `${FORK_PROMPT} You asked the question in the end-of-turn box, not in your reply text:\n${wrapUpLines(wrap)}\n` +
-    'Its first button is your recommendation.'
+    'Its first button is your recommendation. Your options are its buttons\' labels, copied exactly and in their order: ' +
+    'a deck whose options differ from them is dropped.'
 }
 
 /** The fork may wrap its JSON in prose or a fence: take the outermost braces. */

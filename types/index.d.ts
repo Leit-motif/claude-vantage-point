@@ -323,8 +323,6 @@ export type HumanQueueComposedView = { prose: string | null; scopes: Record<stri
 /** The visuals-grading round (#98): the ask shown, each ask's pick and comment by case id, the option whose text is open, and whether the picks were sent. */
 export type HumanQueueGrading = { at: number; picks: Record<string, { pick: string; comment?: string }>; prose: string | null; sent: boolean }
 
-/** The tour behind `/vantage-point tour` (#113): when each stop was last pressed, epoch ms. */
-export type VantageTour = { pressed: Partial<Record<'agent' | 'subagents' | 'decide' | 'queue' | 'reader' | 'caches' | 'palette', number>> }
 /** What the tour's setup lines say: gh and its login, and whether this folder has a human-queue.md. */
 export type VantageTourSetup = { gh: 'signed-in' | 'signed-out' | 'missing' | 'unknown'; login: string | null; queueFile: boolean }
 
@@ -414,8 +412,6 @@ declare module 'claude-code' {
       composedView: HumanQueueComposedView
       /** The visuals-grading round behind `/vantage-point grade` (#98). */
       grading: HumanQueueGrading
-      /** The tour behind `/vantage-point tour` (#113). */
-      tour: VantageTour
       /** The setup the tour read when it last opened. */
       tourSetup: VantageTourSetup
       /** The last scan of every transcript's prompt cache, and when it ran; 0 before the first. */

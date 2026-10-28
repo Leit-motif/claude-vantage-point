@@ -6,8 +6,8 @@
 // `$`: register.tsx hands it the elements, the setup it read, what was pressed,
 // and the presses.
 import type { BoxProps, ButtonProps, ElementConstructor, RenderElement, TextProps } from 'claude-code'
-import type { VantageTour, VantageTourSetup } from '../types'
-import { QUIET, SIGNAL_YELLOW } from './signal'
+import type { VantageTourSetup } from '../types'
+import { SIGNAL_YELLOW } from './signal'
 
 export type TourKey = 'agent' | 'subagents' | 'decide' | 'queue' | 'reader' | 'caches' | 'palette'
 
@@ -29,7 +29,7 @@ export const TOUR_STOPS: readonly TourStop[] = [
     key: 'agent',
     name: 'Agent row',
     does: 'What the agent is on, from its task tool or the ticket its branch names, and its steps.',
-    look: 'The blue row above the prompt; press its title for the steps.',
+    look: 'Above the prompt; press its title for the steps.',
     act: 'send',
     prompt:
       `${TOUR}, the agent row: call the vantage-point task tool with a task of a few words about surveying this project, ` +
@@ -40,7 +40,7 @@ export const TOUR_STOPS: readonly TourStop[] = [
     key: 'subagents',
     name: 'Subagents row',
     does: 'Every subagent this session starts: its model, time, tokens and what it is doing now.',
-    look: 'The subagents row counts them; press the counts for the list.',
+    look: 'Above the prompt; press its counts for the list.',
     act: 'send',
     prompt:
       `${TOUR}, the subagents row: start three subagents in parallel on the cheapest model you have. ` +
@@ -62,7 +62,7 @@ export const TOUR_STOPS: readonly TourStop[] = [
     key: 'queue',
     name: 'Human queue',
     does: 'Asks your agents leave for you, ruled yes or no with W and S, a comment with Tab, sent with R.',
-    look: 'The amber row counts asks; press it for the queue. Writes human-queue.md here.',
+    look: 'The you row counts asks; press it for the queue.',
     act: 'send',
     prompt:
       `${TOUR}, the human queue: following the vantage-point:ask skill, add a request to human-queue.md in this folder ` +
@@ -83,26 +83,21 @@ export const TOUR_STOPS: readonly TourStop[] = [
   {
     key: 'caches',
     name: 'Caches',
-    does: 'Every warm prompt cache on this machine, its minutes left and hit rate. Keep warm pings a cache while you are away, and spends usage while armed.',
+    does: 'Every warm prompt cache here, its minutes and hit rate; Keep warm holds one while you are away.',
     look: 'The footer shows this session’s; the pill opens them all.',
     act: 'open',
   },
   {
     key: 'palette',
     name: 'Palette',
-    does: 'For mod builders: every element a mod can draw on the desktop, one page each.',
-    look: 'Opens beside the chat.',
+    does: 'For mod builders: every element a mod can draw on the desktop.',
+    look: 'One page per element, from text to pictures.',
     act: 'open',
   },
 ]
 
 /** What the plugin leans on, read when the tour opens. `null` login: gh is not signed in or not there. */
 export type TourSetup = VantageTourSetup
-
-/** When each stop was last pressed, epoch ms. */
-export type TourState = VantageTour
-
-export const TOUR_START: TourState = { pressed: {} }
 
 /** The toast a fresh install shows once on this machine. */
 export const FIRST_RUN = 'Vantage Point is on. /vantage-point tour shows what it does, and tries each feature here.'
@@ -117,7 +112,7 @@ export type TourElements = {
 export function setupLines(setup: TourSetup): { key: string; name: string; fact: string; waits: boolean }[] {
   const gh =
     setup.gh === 'signed-in'
-      ? { fact: `signed in as ${setup.login} · asks filed as issues are read from ${setup.login}'s repositories`, waits: false }
+      ? { fact: `signed in as ${setup.login} · asks filed as issues are read from its repositories`, waits: false }
       : setup.gh === 'signed-out'
         ? { fact: 'signed out · run gh auth login to rule on asks filed as issues; human-queue.md works without it', waits: true }
         : setup.gh === 'missing'
@@ -132,22 +127,29 @@ export function setupLines(setup: TourSetup): { key: string; name: string; fact:
   ]
 }
 
-const clock = (at: number) => new Date(at).toTimeString().slice(0, 5)
+/** Cells for a setup line's name, `human-queue.md` and a space; two more while a line carries the dot. */
+const SETUP_NAME_CELLS = 15
 
-/** The tour's page on the desktop. */
-export function tour(el: TourElements, setup: TourSetup, held: TourState, press: (key: TourKey) => void): RenderElement {
+/**
+ * The tour's page on the desktop. A press changes nothing on the page: the prompt
+ * it sends shows in the transcript, the pane it opens shows beside it.
+ * `newProps` says the engine takes Text's size, for the smaller where-to-look line.
+ */
+export function tour(el: TourElements, setup: TourSetup, press: (key: TourKey) => void, newProps: boolean): RenderElement {
   const { Box, Text, Button } = el
   return (
     <Box key="tour" flexDirection="column" rowGap={1} width="100%">
       <Text key="lead" dimColor>
-        A HUD above your prompt, and panes beside the chat. Each Try sends this session's agent a short prompt, so the feature runs for real on this project.
+        Each Try sends this session's agent a short prompt, so the feature runs for real on this project.
       </Text>
       <Box key="setup" flexDirection="column">
-        {setupLines(setup).map(line => (
+        {setupLines(setup).map((line, _i, all) => (
           <Box key={`setup-${line.key}`} flexDirection="row" columnGap={1}>
-            <Text color={line.waits ? SIGNAL_YELLOW : QUIET}>●</Text>
-            <Box flexShrink={0}>
+            {/* The name column fits the longer name and the dot, so both facts share an edge. */}
+            <Box width={SETUP_NAME_CELLS + (all.some(one => one.waits) ? 2 : 0)} flexShrink={0} flexDirection="row" columnGap={1}>
               <Text>{line.name}</Text>
+              {/* Amber only where the person has something to do; nothing at rest. */}
+              {line.waits ? <Text color={SIGNAL_YELLOW}>●</Text> : null}
             </Box>
             <Box key={`setup-${line.key}-fact`} flexGrow={1} flexShrink={1} minWidth={0}>
               <Text dimColor>{line.fact}</Text>
@@ -155,23 +157,22 @@ export function tour(el: TourElements, setup: TourSetup, held: TourState, press:
           </Box>
         ))}
       </Box>
-      {TOUR_STOPS.map(stop => {
-        const at = held.pressed[stop.key]
-        return (
-          <Box key={`stop-${stop.key}`} flexDirection="row" columnGap={2} width="100%">
-            <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-              <Text>{stop.name}</Text>
-              <Text dimColor>{stop.does}</Text>
-              <Box key={`stop-${stop.key}-look`}>
-                <Text dimColor>{at === undefined ? stop.look : `${stop.act === 'send' ? 'Sent' : 'Opened'} ${clock(at)} · ${stop.look}`}</Text>
-              </Box>
-            </Box>
-            <Box flexShrink={0}>
-              <Button key={`try-${stop.key}`} label={stop.act === 'send' ? 'Try' : 'Open'} onPress={() => press(stop.key)} />
+      {/* A gap a row taller than the rows' own sets the setup apart from the features. */}
+      <Box key="stops-gap" height={0} />
+      {TOUR_STOPS.map(stop => (
+        <Box key={`stop-${stop.key}`} flexDirection="row" columnGap={2} width="100%" alignItems="flex-start">
+          <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+            <Text>{stop.name}</Text>
+            <Text dimColor>{stop.does}</Text>
+            <Box key={`stop-${stop.key}-look`}>
+              <Text dimColor {...(newProps ? { size: 'footnote' as const } : {})}>{stop.look}</Text>
             </Box>
           </Box>
-        )
-      })}
+          <Box flexShrink={0}>
+            <Button key={`try-${stop.key}`} label={stop.act === 'send' ? 'Try' : 'Open'} onPress={() => press(stop.key)} />
+          </Box>
+        </Box>
+      ))}
     </Box>
   )
 }

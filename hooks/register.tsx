@@ -101,7 +101,7 @@ import { lineRows, nativePlate, pickNext } from './native-plate'
 import { palette as drawPalette, PAGES, PALETTE_START, SCOPE, takesNewProps } from './palette'
 import { album as drawAlbum, ALBUM_PAGES, ALBUM_START } from './album'
 import { grading as drawGrading } from './grading'
-import { FIRST_RUN, tour as drawTour, tourText, TOUR_START, TOUR_STOPS, type TourKey, type TourSetup } from './tour'
+import { FIRST_RUN, tour as drawTour, tourText, TOUR_STOPS, type TourKey, type TourSetup } from './tour'
 import { gradeCases, gradesMessage, type GradeCase } from '../panes/visuals/grading'
 import { composedCard, deckPictures } from './composed'
 import { plan as planOf, type ComposeItem, type Plan } from '../panes/visuals/compose'
@@ -218,7 +218,6 @@ const cardMode = atom({ plugin: 'vantage-point', key: 'cardMode' } as const, 'na
 const paletteState = atom({ plugin: 'vantage-point', key: 'palette' } as const, PALETTE_START)
 const albumState = atom({ plugin: 'vantage-point', key: 'album' } as const, ALBUM_START)
 const gradingState = atom({ plugin: 'vantage-point', key: 'grading' } as const, { at: 0, picks: {}, prose: null, sent: false } as HumanQueueGrading)
-const tourState = atom({ plugin: 'vantage-point', key: 'tour' } as const, TOUR_START)
 const tourSetup = atom({ plugin: 'vantage-point', key: 'tourSetup' } as const, { gh: 'unknown', login: null, queueFile: false } as TourSetup)
 const plans = atom({ plugin: 'vantage-point', key: 'plans' } as const, {} as Record<string, Plan>)
 const composedView = atom({ plugin: 'vantage-point', key: 'composedView' } as const, { prose: null, scopes: {}, viewing: null } as HumanQueueComposedView)
@@ -902,6 +901,13 @@ async function openGrading($: $): Promise<string> {
 /** Opens the palette specimen on the page named, else where it was left. */
 /** A Try of the Reader's stop: the reply its prompt brings starts the Reader when it lands. */
 let readsNextReply = false
+/** A Try pressed while the agent works: the app drops a prompt submitted mid-turn, so it waits for the turn's end. */
+let tourQueued: { prompt: string; readsNext: boolean } | null = null
+
+async function sendTour($: $, prompt: string, readsNext: boolean): Promise<void> {
+  readsNextReply = readsNext
+  await $.prompt.submit({ text: prompt, asUser: true })
+}
 
 /** Reads what the tour's setup lines say: gh and its login, and this folder's human-queue.md. */
 async function readTourSetup($: $): Promise<void> {
@@ -927,15 +933,17 @@ async function openTour($: $): Promise<string> {
 async function pressTour($: $, key: TourKey): Promise<void> {
   const stop = TOUR_STOPS.find(one => one.key === key)
   if (stop === undefined) return
-  const at = await $.clock.now()
-  await update($, tourState, held => ({ pressed: { ...held.pressed, [key]: at } }))
   if (stop.act === 'open') {
     if (key === 'caches') await openCaches($)
     else await openPalette($, '')
     return
   }
-  readsNextReply = stop.readsNext === true
-  await $.prompt.submit({ text: stop.prompt, asUser: true })
+  if (turnRunning) {
+    tourQueued = { prompt: stop.prompt, readsNext: stop.readsNext === true }
+    $.ui.toast(`${stop.name}: queued, it goes when the agent finishes.`)
+    return
+  }
+  await sendTour($, stop.prompt, stop.readsNext === true)
 }
 
 async function openPalette($: $, page: string): Promise<string> {
@@ -2431,7 +2439,9 @@ async function fillDeck($: $, answer: string, wrap: WrapUpAsk | null, epoch: num
   if (parsed === null) return fillStopped($, 'parse', JSON.stringify(fitted).slice(0, 300))
   // The row's buttons are the agent's own options: a deck that names others would answer a different question.
   const key = (option: string) => option.trim().toLowerCase()
-  if (asked && wrap !== null && [...parsed.options].map(key).sort().join('\n') !== [...wrap.actions].map(key).sort().join('\n')) return
+  if (asked && wrap !== null && [...parsed.options].map(key).sort().join('\n') !== [...wrap.actions].map(key).sort().join('\n')) {
+    return fillStopped($, 'options', JSON.stringify({ fork: parsed.options, asked: wrap.actions }))
+  }
   const cwd = (await $.session.cwd()).replace(/\/$/, '')
   const absolute = (path: string) => (path.startsWith('/') ? path : `${cwd}/${path}`)
   const read = async (path: string) => {
@@ -2799,6 +2809,11 @@ export const register: Register = (on, _options) => {
     // pinging; a real turn is the person acting, so the stop counts from it (issue #60).
     if (e.agentId === undefined) {
       turnRunning = false
+      if (tourQueued !== null) {
+        const queued = tourQueued
+        tourQueued = null
+        void sendTour($, queued.prompt, queued.readsNext).catch(() => undefined)
+      }
       const wasPing = pingTurn !== null && pingTurn === e.turnId
       const missed = pingMissed
       pingTurn = null
@@ -3721,7 +3736,7 @@ export const register: Register = (on, _options) => {
     const setup = await read($, tourSetup)
     if (!('Svg' in elements)) return tourText(elements.Text, setup)
     const { Box, Text, Button } = elements
-    return drawTour({ Box, Text, Button }, setup, await read($, tourState), key => void pressTour($, key).catch(() => undefined))
+    return drawTour({ Box, Text, Button }, setup, key => void pressTour($, key).catch(() => undefined), takesNewProps(await engineBase($)))
   })
 
   // The mock album: each way the desktop can draw an ask, tried on a real one (hooks/album.tsx).

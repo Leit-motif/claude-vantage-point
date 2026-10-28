@@ -8,7 +8,7 @@
     {
       "name": "vantage-point",
       "source": "./",
-      "version": "0.175.0",
+      "version": "0.179.0",
       "description": "A HUD above the Claude Code prompt and a pane where you rule on what your agents ask."
     }
   ]
