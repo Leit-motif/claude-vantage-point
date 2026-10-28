@@ -91,7 +91,7 @@ export const TOUR_STOPS: readonly TourStop[] = [
     key: 'palette',
     name: 'Palette',
     does: 'For mod builders: every element a mod can draw on the desktop.',
-    look: 'One page per element, from text to pictures.',
+    look: 'Opens beside the chat, a page per element.',
     act: 'open',
   },
 ]
@@ -144,7 +144,7 @@ export function tour(el: TourElements, setup: TourSetup, press: (key: TourKey) =
       </Text>
       <Box key="setup" flexDirection="column">
         {setupLines(setup).map((line, _i, all) => (
-          <Box key={`setup-${line.key}`} flexDirection="row" columnGap={1}>
+          <Box key={`setup-${line.key}`} flexDirection="row" columnGap={1} alignItems="flex-start">
             {/* The name column fits the longer name and the dot, so both facts share an edge. */}
             <Box width={SETUP_NAME_CELLS + (all.some(one => one.waits) ? 2 : 0)} flexShrink={0} flexDirection="row" columnGap={1}>
               <Text>{line.name}</Text>
