@@ -21,6 +21,8 @@ export const MAX_TILES = 5
 export const MAX_TEXT_TILES = 2
 /** A queue card draws at most two pictures, its embedded images among them, and at most one of them sentences (the owner, 2026-10-26, #105). */
 export const CARD_CAP: Cap = { tiles: 2, text: 1 }
+/** The fact kinds that say how something works: a picture of one leads its page. */
+export const PROCESS_KINDS: readonly string[] = ['steps', 'flow']
 
 /** How many tiles a page may draw, and how many of them sentences in a frame. */
 export type Cap = { tiles: number; text: number }
@@ -82,7 +84,11 @@ export function page(p: Plan, surface: Surface, measure: Measure, budget = Infin
     const best = drawable.find(one => questionOf(one.view) === q && measure(one.view, 'wide') !== null)
     return best === undefined ? [] : [best]
   })
-  const scored = [...reserved.sort((a, b) => b.score - a.score), ...drawable.filter(one => one.score > TILE_MIN_SCORE && !reserved.includes(one))]
+  // A process the facts hold is the item's main content: it takes the first picture whatever the context tiles
+  // scored, so a narrated workflow is never drawn as its catch and its count (the owner, 2026-10-29).
+  const process = drawable.find(one => PROCESS_KINDS.includes(technique(one.view).reads!) && measure(one.view, 'wide') !== null)
+  const first = process === undefined ? [] : [process]
+  const scored = [...first, ...reserved.filter(one => one !== process).sort((a, b) => b.score - a.score), ...drawable.filter(one => one.score > TILE_MIN_SCORE && !reserved.includes(one) && one !== process)]
   const top = scored[0]?.score ?? 0
   const rows: Tile[][] = []
   const held: string[] = []

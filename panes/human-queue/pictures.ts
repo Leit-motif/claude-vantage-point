@@ -82,23 +82,47 @@ export function fit(width: number, height: number, room: number, tall: number): 
 }
 
 /**
+ * The least share of the room's width a picture keeps when fitting its height would
+ * shrink it further. Under it a tall mock's text goes unreadable (#124: three stacked
+ * mocks drew 218pt wide on the card, their 11pt type at 4pt), so it draws across the
+ * room instead, and the page scrolls by a picture's height, which earns it (ADR 0033).
+ */
+export const LEGIBLE = 0.6
+
+/** `fit`, unless that shrinks the picture under LEGIBLE of the room's width: then the room's width, however tall. */
+export function legible(width: number, height: number, room: number, tall: number): { width: number; height: number } {
+  const fitted = fit(width, height, room, tall)
+  const across = fit(width, height, room, Infinity)
+  return fitted.width < across.width * LEGIBLE ? across : fitted
+}
+
+/**
  * The longest Svg source the desktop takes. One character more and it refuses the
  * pane's whole tree and draws its own "has not drawn" in its place (spell-hotbar-ng#12).
  */
 export const SVG_MAX = 131_072
 
-/** The most base64 the card's copy of a picture holds: twice it, once per href, fits SVG_MAX with room for the markup. */
-export const PREVIEW_MAX = 64_000
+/**
+ * The most base64 one picture's copy holds. The desktop also refuses a whole tree
+ * whose pictures pass about 256 KiB (measured, #124: three Svgs of 256,176 base64
+ * characters in all drew, four of 288,744 froze the pane on its last tree), and a
+ * card draws at most two pictures, so each gets half of it, in one Svg.
+ */
+export const PICTURE_MAX = 120_000
 
 /**
- * A plain Svg holding one PNG or JPEG as a data URI, at `width` by `height`, or null
- * when it would pass SVG_MAX, since the desktop would then draw nothing in the pane.
+ * A plain Svg holding one PNG, JPEG or AVIF as a data URI, at `width` by `height`,
+ * or null when it would pass SVG_MAX, since the desktop would then draw nothing in
+ * the pane. One `href` only: the desktop draws it (docs/palette.md), and a second
+ * copy in `xlink:href` halved what a picture could hold.
  */
 export function pictureSvg(base64: string, width: number, height: number): string | null {
-  const uri = `data:image/${base64.startsWith('/9j/') ? 'jpeg' : 'png'};base64,${base64}`
+  // An AVIF opens with a box size, then `ftypavif`, which base64 spells from the sixth character on.
+  const type = base64.startsWith('/9j/') ? 'jpeg' : base64.slice(5, 16) === 'GZ0eXBhdmlm' ? 'avif' : 'png'
+  const uri = `data:image/${type};base64,${base64}`
   const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
-    `<image width="${width}" height="${height}" preserveAspectRatio="xMidYMid meet" href="${uri}" xlink:href="${uri}"/>` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+    `<image width="${width}" height="${height}" preserveAspectRatio="none" href="${uri}"/>` +
     '</svg>'
   return svg.length > SVG_MAX ? null : svg
 }
@@ -119,18 +143,23 @@ export function fetchArgs(fetch: Fetch): string[] {
 }
 
 /**
- * Fetches one picture into the cache once, as a PNG no wider or taller than 1000px,
- * and prints its file, width, height and the base64 of the card's copy on four lines.
- * The card's copy is the PNG when its base64 fits PREVIEW_MAX, else a JPEG shrunk
- * until it does. `$1` is the cache name, `$2` the kind, the rest its arguments. The
- * gh token stays inside the shell.
+ * Fetches one picture into the cache once, as a PNG at most 1280px wide (a pane at
+ * 2x needs about 1200) and 4000px tall, and prints its file, width, height and the
+ * base64 of the card's copy on four lines. The copy is the first that fits
+ * PICTURE_MAX: the PNG, then AVIF at quality 85, 70 and 50, which keep a mock's
+ * text clean where a JPEG rang (#124: #123's 1224 by 2020 mock is 117k characters
+ * at 85); past them, the same ladder on a copy three quarters as wide. `$1` is the
+ * cache name, `$2` the kind, the rest its arguments. The gh token stays inside the shell.
  */
 export const FETCH_SCRIPT = `set -u
 dir="$HOME/Library/Caches/vantage-point/pictures"
 name=$1; kind=$2; shift 2
-out="$dir/$name.png"
+out="$dir/$name.wide.png"
+view="$dir/$name.copy"
 mkdir -p "$dir" || exit 3
+size() { sips -g pixelWidth -g pixelHeight "$1" | awk '/pixelWidth/{w=$2} /pixelHeight/{h=$2} END{print w, h}'; }
 if [ ! -s "$out" ]; then
+  rm -f "$view"
   tmp=$(mktemp "$dir/.fetch.XXXXXX") || exit 3
   ok=1
   case $kind in
@@ -141,23 +170,33 @@ if [ ! -s "$out" ]; then
   esac
   if [ $ok -ne 0 ] || ! sips -s format png "$tmp" --out "$out" >/dev/null 2>&1; then rm -f "$tmp" "$out"; exit 4; fi
   rm -f "$tmp"
-  w=$(sips -g pixelWidth "$out" | awk '/pixelWidth/{print $2}'); h=$(sips -g pixelHeight "$out" | awk '/pixelHeight/{print $2}')
-  if [ "$w" -gt 1000 ] || [ "$h" -gt 1000 ]; then sips -Z 1000 "$out" >/dev/null 2>&1; fi
+  set -- $(size "$out")
+  if [ "$1" -gt 1280 ]; then sips --resampleWidth 1280 "$out" >/dev/null 2>&1; fi
+  set -- $(size "$out")
+  if [ "$2" -gt 4000 ]; then sips -Z 4000 "$out" >/dev/null 2>&1; fi
 fi
-view="$dir/$name.view.jpg"
-fits() { [ "$(wc -c < "$1")" -le ${(PREVIEW_MAX * 3) / 4} ]; }
-if fits "$out"; then view=$out
-elif [ ! -s "$view" ] || ! fits "$view"; then
-  w=$(sips -g pixelWidth "$out" | awk '/pixelWidth/{print $2}'); h=$(sips -g pixelHeight "$out" | awk '/pixelHeight/{print $2}')
-  most=$w; [ "$h" -gt "$most" ] && most=$h
-  for z in 900 720 560 440 340 260 200 150; do
-    [ "$z" -lt "$most" ] || continue
-    sips -s format jpeg -s formatOptions 70 -Z "$z" "$out" --out "$view" >/dev/null 2>&1 || break
-    fits "$view" && break
+set -- $(size "$out"); w=$1; h=$2
+if [ ! -s "$view" ]; then
+  most=${(PICTURE_MAX * 3) / 4}
+  src="$dir/.copy.$$.png"; try="$dir/.copy.$$.try"
+  cp "$out" "$src" || exit 3
+  cw=$w; found=1
+  while [ $cw -ge 200 ]; do
+    if [ "$(wc -c < "$src")" -le $most ]; then cp "$src" "$view"; found=0; break; fi
+    for q in 85 70 50; do
+      sips -s format avif -s formatOptions $q "$src" --out "$try" >/dev/null 2>&1 || break
+      if [ "$(wc -c < "$try")" -le $most ]; then mv "$try" "$view"; found=0; break; fi
+    done
+    [ $found -eq 0 ] && break
+    cw=$((cw * 3 / 4))
+    sips --resampleWidth $cw "$out" --out "$src" >/dev/null 2>&1 || break
   done
+  rm -f "$src" "$try"
+  [ $found -eq 0 ] || exit 5
 fi
 echo "$out"
-sips -g pixelWidth -g pixelHeight "$out" | awk '/pixel(Width|Height)/{print $2}'
+echo "$w"
+echo "$h"
 base64 -i "$view" | tr -d '\\n'
 `
 

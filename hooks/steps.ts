@@ -87,7 +87,7 @@ export const currentOf = (steps: readonly Step[]): Step | undefined =>
  * the band's padding and the agent card's outline, first line and gaps; 19 a line of text; 19.75 a step.
  * The agent card and three rows with two steps measured 235.5, which this gives.
  */
-const BAND_PT = { row: 21.5, pillRow: 40, card: 76, text: 19, step: 19.75 }
+export const BAND_PT = { row: 21.5, pillRow: 40, card: 76, text: 19, step: 19.75 }
 
 /**
  * How many step lines the agent card can hold beside what else the band shows (`pillRows` rows with

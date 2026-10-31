@@ -14,7 +14,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren, RenderElement, RenderInput, RenderSurface, TurnStepChunk, TurnStepResult } from 'claude-code'
 
-import type { HumanQueueCache, HumanQueueFrontier, HumanQueueAgentNext, HumanQueueDeckPage, HumanQueueAgentBranch, HumanQueueAsk, HumanQueueDecision, HumanQueueFact, HumanQueueReady, HumanQueueReading, HumanQueueReplyTicket, HumanQueueTask, HumanQueueTicketPage, HumanQueueTicketState, HumanQueueCapture, HumanQueueIssue, HumanQueueSubmission, HumanQueueUndo, HumanQueueView, HumanQueueComposedView, HumanQueueGrading, HumanQueueStep } from '../types'
+import type { HumanQueueBannerPlaced, HumanQueueEdited, HumanQueueGoverning, HumanQueueCache, HumanQueueFrontier, HumanQueueAgentNext, HumanQueueDeckPage, HumanQueueAgentBranch, HumanQueueAsk, HumanQueueDecision, HumanQueueFact, HumanQueueReady, HumanQueueReading, HumanQueueReplyTicket, HumanQueueTask, HumanQueueTicketPage, HumanQueueTicketState, HumanQueueCapture, HumanQueueIssue, HumanQueueSubmission, HumanQueueUndo, HumanQueueView, HumanQueueComposedView, HumanQueueGrading, HumanQueueStep } from '../types'
 import { DESKTOP_CHARS_PER_CELL, shortTitle, titleRoom } from '../panes/band/title'
 import { PANEL, picture } from '../panes/reader/picture'
 import { SPEED_STEP } from '../panes/reader/reading'
@@ -47,7 +47,7 @@ import {
   viewCard,
 } from '../panes/human-queue/issues'
 import type { Found, LabelSearch, Run, Viewed } from '../panes/human-queue/issues'
-import { BUDGETS, noteRefusal, paced, pausedNow, readHold } from '../panes/human-queue/limits'
+import { BUDGETS, noteRefusal, paced, pausedNow, readHold, refusalLine } from '../panes/human-queue/limits'
 import type { Budget, PauseIO } from '../panes/human-queue/limits'
 import { mentionsOf } from '../panes/human-queue/mentions'
 import {
@@ -84,9 +84,12 @@ import {
 import type { Item, Request } from '../panes/human-queue/queue'
 import { agentPill, youPill, freshCount, freshPill, staleCount, readSpecProgress, waitingTotal, NEW_ASK_MS } from './band'
 import type { CountObservation } from './band'
-import { withoutGist, boxlessWrapUp, callKey, checkLines, citedSentences, sourceName, wasRead, checkTouches, deckPageFacts, decisionFromFork, fileUrl, decisionOfPermission, decisionOfQuestions, modeOf, projectFolder, ROW_MODES, decisionOfWrapUp, optionSends, fitFields, forkPrompt, GATE_MODEL, GATE_SYSTEM, gateText, isMemoryPath, isYes, looksLikeDecision, parseForkJson, PERSON_TOOLS, proposedCard, startedCard, WRAP_UP_TOOL, wrapUpAsk } from './deck'
+import { withoutGist, asButtons, boxlessWrapUp, callKey, checkTouches, deckFacts, decisionFromFork, fileUrl, decisionOfPermission, decisionOfQuestions, modeOf, projectFolder, ROW_MODES, decisionOfWrapUp, optionSends, fitFields, forkPrompt, GATE_MODEL, GATE_SYSTEM, gateText, isYes, looksLikeDecision, parseForkJson, PERSON_TOOLS, proposedCard, startedCard, WRAP_UP_TOOL, wrapUpAsk } from './deck'
 import type { WrapUpAsk } from './deck'
 import { snapshot } from './snapshot'
+import { governingOf, type BannerIO } from './banner'
+import { banner, bannerWidth, type BandRow } from '../panes/banner/picture'
+import { EDIT_TOOLS, editDelta, recordEdit } from '../panes/banner/edits'
 import { fromLabels, fromScript, GROUPS, inFlightSpec, nextOf, parseRepoIssues } from './frontier'
 import { STATE_SECTION, stateLine } from './state'
 import { counts as teamCounts, detail, elapsed, freshMeta, isFailed, isLive, mergeListed, modelOf, ordered, rowFacts, ROOM, waitingOn } from './subagents'
@@ -98,7 +101,9 @@ import type { ReaderIO } from './reader'
 import { plainQuote } from './reply'
 import { bodyProps, nativeCard, setupText } from './native-card'
 import { lineRows, nativePlate, pickNext } from './native-plate'
-import { palette as drawPalette, PAGES, PALETTE_START, SCOPE, takesNewProps } from './palette'
+import { palette as drawPalette, PAGES, PALETTE_START, SCOPE } from './palette'
+import { takesNewProps } from './engine'
+import { DEV_PANES } from './dev'
 import { album as drawAlbum, ALBUM_PAGES, ALBUM_START } from './album'
 import { grading as drawGrading } from './grading'
 import { FIRST_RUN, tour as drawTour, tourText, TOUR_STOPS, type TourKey, type TourSetup } from './tour'
@@ -124,7 +129,7 @@ import { CONTEXT_HIGH, contextLabel } from '../panes/caches/context'
 import { freshBrief, handbackOf, isHandbackOf } from '../panes/human-queue/handback'
 import { screenSvg } from './screen'
 import { refusal } from './refusal'
-import { FETCH_SCRIPT, fetchArgs, fetchOf, fit, loadedOf, nameOf, pictureSvg, picturesOf, withoutPictures } from '../panes/human-queue/pictures'
+import { FETCH_SCRIPT, fetchArgs, fetchOf, legible, loadedOf, nameOf, pictureSvg, picturesOf, withoutPictures } from '../panes/human-queue/pictures'
 import type { Loaded, Picture } from '../panes/human-queue/pictures'
 import type { Screen, ScreenRequest } from './screen'
 
@@ -176,7 +181,7 @@ function markIcon(kind: 'merged' | 'child'): { source: string; alt: string } {
 }
 const TOOL = 'mcp__vantage-point__review'
 const TASK_TOOL = 'mcp__vantage-point__task'
-/** Opens the palette or the mock album, so an agent can stage either for a shot with no typed command. */
+/** Opens a pane or flips a session switch with no typed command, so an agent can stage a shot. */
 const SHOW_TOOL = 'mcp__vantage-point__show'
 /** Cells a pill takes beyond its label (`panes/band/title.ts`). */
 const PILL_CELLS = 2
@@ -185,6 +190,8 @@ type CardAction = { label: string; run: () => Promise<void> }
 const POLL_MS = 1500
 /** How often the issues are read again; GitHub's search allows 30 a minute. */
 const ISSUE_POLL_MS = 60_000
+/** The window a session's first GitHub read falls in, at a moment taken from its id. */
+const FIRST_READ_SPREAD_MS = 20_000
 /** How long one read of the issues may take before it stops; the next read starts where it stopped. */
 const SCAN_BUDGET_MS = 45_000
 /** How long an answered issue stays hidden while GitHub's search catches up. */
@@ -222,7 +229,20 @@ const tourSetup = atom({ plugin: 'vantage-point', key: 'tourSetup' } as const, {
 const plans = atom({ plugin: 'vantage-point', key: 'plans' } as const, {} as Record<string, Plan>)
 const composedView = atom({ plugin: 'vantage-point', key: 'composedView' } as const, { prose: null, scopes: {}, viewing: null } as HumanQueueComposedView)
 /** The keyboard is in the native card's comment field: it is the Input; otherwise a saved comment rests as wrapped text. */
-const commentTyping = atom({ plugin: 'vantage-point', key: 'commentTyping' } as const, false)
+// The sessions whose queue pane has its comment field open. The store is every session's, so a lone flag
+// opened the field in every pane at once; each session keeps its own entry (the design review, 2026-10-29).
+const commentOpenIn = atom({ plugin: 'vantage-point', key: 'commentOpenIn' } as const, [] as string[])
+
+/** Whether this session's comment field is open. */
+async function isCommentOpen($: $): Promise<boolean> {
+  return (await read($, commentOpenIn)).includes(await $.session.id().catch(() => '?'))
+}
+
+/** Opens or shuts this session's comment field, and only this session's. */
+async function setCommentOpen($: $, open: boolean): Promise<void> {
+  const id = await $.session.id().catch(() => '?')
+  await update($, commentOpenIn, ids => (open ? [...ids.filter(one => one !== id), id] : ids.filter(one => one !== id)))
+}
 const undoStack = atom({ plugin: 'vantage-point', key: 'undo' } as const, [])
 const redoStack = atom({ plugin: 'vantage-point', key: 'redo' } as const, [])
 const notify = atom({ plugin: 'vantage-point', key: 'notify' } as const, [])
@@ -262,6 +282,25 @@ const subagentPick = atom({ plugin: 'vantage-point', key: 'subagentPick' } as co
 const steps = atom({ plugin: 'vantage-point', key: 'steps' } as const, [] as HumanQueueStep[])
 /** Whether the band draws this session's task list in place of the app's own: on unless the session turned it off (issue 104). */
 const stepsHere = atom({ plugin: 'vantage-point', key: 'stepsHere' } as const, true)
+/** Every file this session's agents edited, and the ADR each answers to (issue 119). */
+const bannerEdits = atom({ plugin: 'vantage-point', key: 'bannerEdits' } as const, [] as HumanQueueEdited[])
+const bannerAdrs = atom({ plugin: 'vantage-point', key: 'bannerAdrs' } as const, {} as Record<string, HumanQueueGoverning | null>)
+/**
+ * Where the banner placed its nodes, by the layout and the width it drew at (`l3-w736`), the latest last: a redraw starts
+ * from them, so nothing moves by itself. One per width, since a session shown in two windows draws
+ * at each one's width in turn, and a single layout would be placed again on every draw.
+ */
+const bannerPlaced = atom({ plugin: 'vantage-point', key: 'bannerPlaced' } as const, {} as Record<string, HumanQueueBannerPlaced>)
+/** The widths whose layouts are kept. */
+const BANNER_WIDTHS_KEPT = 3
+/**
+ * The layout that placed a session's nodes, in its keys (`l3-w736`): places kept by an earlier
+ * layout are dropped, not held, since a node held where an older layout put it no longer fits the
+ * strip the new one draws. Raise it whenever `panes/banner/layout.ts` places nodes differently.
+ */
+const BANNER_LAYOUT = 'l6'
+/** Whether this session shows the banner: hidden until the person or an agent turns it on. */
+const bannerOn = atom({ plugin: 'vantage-point', key: 'bannerOn' } as const, false)
 const caches = atom({ plugin: 'vantage-point', key: 'caches' } as const, { at: 0, caches: [] as HumanQueueCache[] })
 const cachesHidden = atom({ plugin: 'vantage-point', key: 'cachesHidden' } as const, SHOW_ALL)
 const cachesMenu = atom({ plugin: 'vantage-point', key: 'cachesMenu' } as const, false)
@@ -386,13 +425,6 @@ function bucketOf(request: Request, project: string): string {
   return request.issue === undefined ? project : (request.issue.repo.split('/')[1] ?? request.issue.repo)
 }
 
-/** The bucket of a request known only by its qualified id, as after it was submitted. */
-function bucketOfQid(qid: string, project: string): string {
-  const source = sourceOf(qid)
-  if (source.kind === 'file') return project
-  return source.id.split('#')[0]?.split('/')[1] ?? project
-}
-
 /** The project folder's name: the bucket of human-queue.md's requests. */
 async function projectName($: $): Promise<string> {
   const root = await $.session.root()
@@ -413,6 +445,10 @@ function bucketsOf(open: Request[], project: string): { name: string; requests: 
 const pausesSeen = new Map<Budget, unknown>()
 
 /** GitHub's rate-limit pauses, one per budget, in the store every session reads. */
+/** Where every session writes down each call GitHub refused for a limit (#117), newest last. */
+const LIMITS_LOG = 'Library/Logs/vantage-point/github-limits.log'
+const LIMITS_LOG_LINES = 500
+
 function pauseIO($: $): PauseIO {
   return {
     now: () => $.clock.now(),
@@ -424,6 +460,14 @@ function pauseIO($: $): PauseIO {
     save: async (budget, hold) => {
       pausesSeen.set(budget, hold)
       await $.store.set(`github-pause-${budget}`, hold).catch(() => undefined)
+    },
+    note: async refusal => {
+      const home = (await $.env.get('HOME')) ?? ''
+      if (home === '') return
+      const path = `${home}/${LIMITS_LOG}`
+      const kept = (await $.fs.exists(path)) ? String(await $.fs.read(path)).split('\n').filter(line => line !== '').slice(-(LIMITS_LOG_LINES - 1)) : []
+      const session = await $.session.id().catch(() => '?')
+      await $.fs.write(path, [...kept, `${refusalLine(refusal)} [session ${session.slice(0, 8)}]`].join('\n') + '\n')
     },
   }
 }
@@ -934,8 +978,7 @@ async function pressTour($: $, key: TourKey): Promise<void> {
   const stop = TOUR_STOPS.find(one => one.key === key)
   if (stop === undefined) return
   if (stop.act === 'open') {
-    if (key === 'caches') await openCaches($)
-    else await openPalette($, '')
+    await openCaches($)
     return
   }
   if (turnRunning) {
@@ -1522,10 +1565,17 @@ async function planOpen($: $, requests?: readonly Request[]): Promise<void> {
   await planItems($, composable(requests ?? (await openRequests($))))
 }
 
+/** An item's open prose or full-size picture, as this session holds it: the composed view is in the shared store. */
+async function proseKey($: $, id: string): Promise<string> {
+  return `${await $.session.id().catch(() => '?')}|${id}`
+}
+
 /** Opens or closes an item's prose on its card; each open is counted in the store, per item. */
 async function toggleProse($: $, id: string): Promise<void> {
-  const open = (await read($, composedView)).prose === id
-  await update($, composedView, held => ({ ...held, prose: open ? null : id }))
+  // Keyed by session: the store is every session's, and one pane's Full text opened it in all of them.
+  const key = await proseKey($, id)
+  const open = (await read($, composedView)).prose === key
+  await update($, composedView, held => ({ ...held, prose: open ? null : key }))
   if (open) return
   const counts = await $.store.get(PROSE_OPENS_KEY).catch(() => undefined)
   const all = typeof counts === 'object' && counts !== null && !Array.isArray(counts) ? (counts as Record<string, unknown>) : {}
@@ -1559,7 +1609,7 @@ async function composedOf(
       facts: one.facts,
       question: item.heading === String(item.index) ? null : item.heading,
       prose: withoutPictures(item.body),
-      proseOpen: held.prose === one.id,
+      proseOpen: held.prose === (await proseKey($, one.id)),
       room: cardWidth(e.props.bodyColumns),
       scope: held.scopes[one.id] ?? -1,
       newProps: takesNewProps(await engineBase($)),
@@ -1606,18 +1656,10 @@ async function showRequest($: $, qid: string): Promise<void> {
   await show($, qidOf(request), firstUnruled(request))
 }
 
-/** Moves on to the first open request, after one was submitted. */
-async function showNext($: $): Promise<void> {
-  const open = await openRequests($)
-  const was = (await read($, view)).request
-  const project = await projectName($)
-  const bucket = was === null ? undefined : bucketOfQid(was, project)
-  const same = bucket === undefined ? undefined : open.find(r => bucketOf(r, project) === bucket)
-  if (same !== undefined) return show($, qidOf(same), firstUnruled(same))
-  // That bucket is empty: back to the plate when other buckets wait, else the next request.
-  const next = select(open, { request: null, item: 1 }).request
-  const zoom = bucketsOf(open, project).length > 1 ? 'plate' : 'bucket'
-  await show($, next === undefined ? null : qidOf(next), next === undefined ? 1 : firstUnruled(next), zoom)
+/** Goes back to the plate after a submit, never on to the next ask (the owner, 2026-10-29). */
+async function showPlate($: $): Promise<void> {
+  const next = select(await openRequests($), { request: null, item: 1 }).request
+  await show($, next === undefined ? null : qidOf(next), next === undefined ? 1 : firstUnruled(next), 'plate')
 }
 
 // --- Rulings, notes, undo ----------------------------------------------------------
@@ -1722,7 +1764,7 @@ async function replay($: $, entry: HumanQueueUndo, side: 'before' | 'after'): Pr
     $.ui.toast(`Reopened ${id}.`)
   } else {
     await handBack($, entry.request)
-    await showNext($)
+    await showPlate($)
   }
   return true
 }
@@ -1916,7 +1958,7 @@ async function takeBack($: $, key: string): Promise<boolean> {
 async function resubmit($: $, key: string): Promise<boolean> {
   const done = await submitIssue($, key, await today($))
   if (done === null) return false
-  await showNext($)
+  await showPlate($)
   return true
 }
 
@@ -2124,7 +2166,7 @@ async function submit($: $): Promise<void> {
     await update($, redoStack, () => [])
     await update($, capture, () => null)
     $.ui.toast(`Submitted ${shortKey(request.id)}. Q takes it back before it posts.`)
-    await showNext($)
+    await showPlate($)
     return
   }
   let before = { status: null as string | null, completed: null as string | null }
@@ -2142,7 +2184,7 @@ async function submit($: $): Promise<void> {
   await update($, capture, () => null)
   await handBack($, qid)
   $.ui.toast(`Submitted ${request.id} ${request.title}. Q takes it back.`)
-  await showNext($)
+  await showPlate($)
 }
 
 /** Takes back a submit that waits for R and was never sent, from the button on its page. */
@@ -2161,6 +2203,8 @@ async function comment($: $, surface: RenderSurface): Promise<void> {
   const { request, item, index } = await current($)
   if (request === undefined) return
   if (surface !== 'mobile') {
+    // The comment is typed in the pane (the owner, 2026-10-29): Comment opens its field there.
+    await setCommentOpen($, true)
     await $.ui.focus({ requestId: PANE, key: 'comment' }).catch(() => undefined)
     return
   }
@@ -2247,6 +2291,7 @@ async function pressNative($: $, action: Action, surface: RenderSurface, from: '
   lastAct = { key: action, at: now, from }
   if (action === 'undo' || action === 'redo' || action === 'comment') return act($, action, surface, from)
   if (!(await flushDraft($))) return
+  await setCommentOpen($, false)
   if (action === 'yes' || action === 'no') return rule($, action)
   if (action === 'prev' || action === 'next') return step($, action === 'prev' ? -1 : 1)
   return saveAndMove($)
@@ -2376,16 +2421,6 @@ async function fillStopped($: $, stage: string, detail = ''): Promise<void> {
 const DECK_PICKS_KEY = 'deckPicks'
 const DECK_PICKS_LOG = 200
 
-/** Memory files the agent read this turn. */
-const memoryReads = new Set<string>()
-
-/** The auto-memory files the context carries now. */
-async function memoriesInContext($: $): Promise<string[]> {
-  const usage = await $.session.usage({ breakdown: 'summary' }).catch(() => null)
-  const files = usage?.context?.breakdown?.memoryFiles ?? []
-  return files.filter(file => file.type === 'AutoMem').map(file => file.path)
-}
-
 /** One Haiku call; null when it does not answer. */
 async function haiku($: $, system: string, prompt: string, maxTokens: number): Promise<string | null> {
   const r = await $.model.complete({ model: GATE_MODEL, system, prompt, maxTokens, timeoutMs: 30_000 })
@@ -2434,14 +2469,12 @@ async function fillDeck($: $, answer: string, wrap: WrapUpAsk | null, epoch: num
   const raw = parseForkJson(fork.text)
   if (raw === null) return fillStopped($, 'json', fork.text.slice(-300))
   const fitted = await fitFields(raw, (text, words) =>
-    haiku($, `Say this in ${words} words or fewer, keeping any [n] citations. Reply with the shorter text only.`, text, 120))
-  const parsed = decisionFromFork(fitted)
-  if (parsed === null) return fillStopped($, 'parse', JSON.stringify(fitted).slice(0, 300))
+    haiku($, `Say this in ${words} words or fewer, Reply with the shorter text only.`, text, 120))
+  const forked = decisionFromFork(fitted)
+  if (forked === null) return fillStopped($, 'parse', JSON.stringify(fitted).slice(0, 300))
   // The row's buttons are the agent's own options: a deck that names others would answer a different question.
-  const key = (option: string) => option.trim().toLowerCase()
-  if (asked && wrap !== null && [...parsed.options].map(key).sort().join('\n') !== [...wrap.actions].map(key).sort().join('\n')) {
-    return fillStopped($, 'options', JSON.stringify({ fork: parsed.options, asked: wrap.actions }))
-  }
+  const parsed = asked && wrap !== null ? asButtons(forked, wrap.actions) : forked
+  if (parsed === null) return fillStopped($, 'options', JSON.stringify({ fork: forked.options, asked: wrap?.actions ?? [] }))
   const cwd = (await $.session.cwd()).replace(/\/$/, '')
   const absolute = (path: string) => (path.startsWith('/') ? path : `${cwd}/${path}`)
   const read = async (path: string) => {
@@ -2449,26 +2482,20 @@ async function fillDeck($: $, answer: string, wrap: WrapUpAsk | null, epoch: num
     if (typeof text !== 'string') throw new Error('not text')
     return text
   }
-  const memories = new Set([...(await memoriesInContext($)), ...memoryReads])
-  // A source is a file one of the session's tool calls named, and lines read from it now (#108).
   const uses = (await $.session.messages().catch(() => [])).flatMap(message => (message.role === 'assistant' ? message.toolUses : []))
-  const calls = uses.map(use => use.input)
-  const quoted = await checkLines({ ...parsed, sources: parsed.sources?.map(source => ({ ...source, path: absolute(source.path) })) }, read, path => wasRead(calls, path, path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : ''), memories)
-  const touched = await checkTouches({ ...quoted, touches: quoted.touches?.map(paths => paths.map(touch => ({ ...touch, path: absolute(touch.path) }))) }, read)
+  const touched = await checkTouches({ ...parsed, touches: parsed.touches?.map(paths => paths.map(touch => ({ ...touch, path: absolute(touch.path) }))) }, read)
   const supported = touched
   if (epoch !== deckEpoch) return
   // Paths in the session folder show relative to it.
   const relative = (path: string) => (path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path)
   const shown = {
     ...supported,
-    sources: supported.sources?.map(source => ({ ...source, path: relative(source.path) })),
     touches: supported.touches?.map(paths => paths.map(touch => ({ ...touch, path: relative(touch.path) }))),
   }
   // Each argument's fact, checked against the output of the call it came from (#110).
   const argued = await checkArguments(argumentsOf(raw.arguments), uses.map(use => ({ tool: use.tool, input: use.input, text: typeof use.text === 'string' ? use.text : '' })),
     path => read(absolute(path.replace(/^~(?=\/)/, ''))).catch(() => null))
   if (argued.length > 0) Object.assign(shown, { arguments: argued })
-  if (shown.sources === undefined) delete shown.sources
   if (shown.touches === undefined) delete shown.touches
   const sends = optionSends(shown.options, wrap)
   await update($, decision, () => ({ ...shown, sends }))
@@ -2477,11 +2504,11 @@ async function fillDeck($: $, answer: string, wrap: WrapUpAsk | null, epoch: num
   const kept = Array.isArray(logged) ? logged.slice(-(DECK_PICKS_LOG - 1)) : []
   void $.store.set(DECK_PICKS_KEY, [...kept, { at: await $.clock.now(), picks: shown.picks ?? [] }]).catch(() => undefined)
   // The fork's own picks beside the ones kept, and why a kept pick cannot draw, so a pick that fails shows in the log.
-  const refused = eligible(deckPageFacts(shown) ?? {}, 'desktop').refused.filter(one => shown.picks?.includes(one.view)).map(one => `${one.view}: ${one.reason}`)
+  const refused = eligible(deckFacts(shown.facts) ?? {}, 'desktop').refused.filter(one => shown.picks?.includes(one.view)).map(one => `${one.view}: ${one.reason}`)
   const backed = argued.filter(one => one.fact !== undefined).map(one => one.fact!.shape)
   void fillStopped($, 'shown', `${(shown.picks ?? []).join(', ')} | fork: ${JSON.stringify(raw.picks ?? null).slice(0, 200)}${refused.length === 0 ? '' : ` | refused: ${refused.join('; ').slice(0, 300)}`} | arguments: ${argued.length}, facts: ${backed.join(', ') || 'none'}`)
   // The deck's pictures are planned in the background, as a queue item's are, and drawn once the plan lands (#100).
-  const composed = composeDecision({ ...shown, facts: deckPageFacts(shown) })
+  const composed = composeDecision({ ...shown, facts: deckFacts(shown.facts) })
   if (composed !== null) void planItems($, [composed]).catch(() => undefined)
   const since = await $.clock.now()
   await update($, decisionCards, () => ({ tasks: [...cards], since }))
@@ -2621,6 +2648,47 @@ async function toggleSteps($: $): Promise<string> {
   )
 }
 
+/** The sessions that show the session banner (issue 119), by `$.session.id()`: off until turned on, and remembered. */
+const BANNER_KEY = 'bannerSessions'
+
+async function bannerSessions($: $): Promise<string[]> {
+  const held = await $.store.get(BANNER_KEY)
+  return Array.isArray(held) ? held.filter((id): id is string => typeof id === 'string') : []
+}
+
+/** Shows the session banner above the band for this session, or hides it, and says which. */
+async function toggleBanner($: $): Promise<string> {
+  const id = await $.session.id()
+  const shown = await bannerSessions($)
+  const isOn = shown.includes(id)
+  await $.store.set(BANNER_KEY, isOn ? shown.filter(other => other !== id) : [...shown, id])
+  await update($, bannerOn, () => !isOn)
+  if (isOn) return 'The session banner is hidden.'
+  const files = (await read($, bannerEdits)).length
+  return (
+    `The session banner shows above the band, ${files === 0 ? "from this session's first edit" : `${files} file${files === 1 ? '' : 's'} edited`}. ` +
+    `The band last drew ${bandSeen.maxRows} rows by ${bandSeen.columns} columns.`
+  )
+}
+
+function bannerIO($: $): BannerIO {
+  return {
+    git: async (dir, args) => {
+      const ran = await $.process.run(['git', '-C', dir, ...args], { timeoutMs: 15_000 })
+      return ran.exitCode === 0 ? ran.stdout : null
+    },
+    list: async dir => ((await $.fs.exists(dir)) ? (await $.fs.list(dir)).filter(entry => entry.kind === 'file').map(entry => entry.name) : null),
+    read: async path => String(await $.fs.read(path)),
+    now: () => $.clock.now(),
+  }
+}
+
+/** Reads which ADR the file at `path` answers to, off the edit's path: local git, no GitHub. */
+async function governBanner($: $, path: string): Promise<void> {
+  const adr = await governingOf(bannerIO($), path).catch(() => null)
+  await update($, bannerAdrs, held => ({ ...held, [path]: adr }))
+}
+
 /** Whether update_plan calls are renamed now: where the band draws the steps, outside plan mode. */
 async function renamesHere($: $): Promise<boolean> {
   return (await read($, stepsHere)) && (await sessionMode($).catch(() => null)) !== 'plan'
@@ -2741,16 +2809,20 @@ export const register: Register = (on, _options) => {
     await $.tool.register({
       name: 'show',
       description:
-        'Open one of Vantage Point\'s reference panes beside the conversation: "palette", what the desktop can draw, ' +
-        'one page per element, or "album", every way to draw an ask, tried on a real one. Use it to stage a pane for ' +
-        'a screenshot, or to show the person a technique; it changes nothing else. "steps" instead turns the band\'s ' +
+        (DEV_PANES
+          ? 'Open one of Vantage Point\'s development panes beside the conversation: "palette", what the desktop can draw, ' +
+            'one page per element, "album", every way to draw an ask, tried on a real one, or "grading", the visuals-grading ' +
+            'round. Use it to stage a pane for a screenshot; it changes nothing else. '
+          : '') +
+        '"steps" turns the band\'s ' +
         'task list off for this session, leaving it to the app, or back on. "deck-facts" turns on, or off, the decision ' +
         'deck that draws each argument over the tool output it rests on, for this session only. "tour" opens the tour: ' +
-        'the setup this plugin needs and every feature, each with a button that runs it here.',
+        'the setup this plugin needs and every feature, each with a button that runs it here. "banner" shows, or hides, the ' +
+        'session banner above the band: this session\'s edited files and the ADR each answers to.',
       inputSchema: {
         type: 'object',
         properties: {
-          pane: { type: 'string', enum: ['palette', 'album', 'grading', 'steps', 'deck-facts', 'tour'], description: 'Which pane to open, "steps" to turn the band\'s task list off or back on, or "deck-facts" to turn the deck\'s arguments on or off for this session.' },
+          pane: { type: 'string', enum: [...(DEV_PANES ? ['palette', 'album', 'grading'] : []), 'steps', 'deck-facts', 'banner', 'tour'], description: 'Which pane to open, "steps" to turn the band\'s task list off or back on, "deck-facts" to turn the deck\'s arguments on or off, or "banner" to show or hide the session banner, for this session.' },
           page: { type: 'string', description: 'The page to open at, by its key (e.g. "svg", "threshold"); omit for where it was left.' },
         },
         required: ['pane'],
@@ -2759,6 +2831,8 @@ export const register: Register = (on, _options) => {
     // Off the start's path, so the tools above are declared however long the transcript takes to read.
     // A store or session id that cannot be read leaves the app's own list.
     void (async () => {
+      const isBannerOn = await bannerSessions($).then(async shown => shown.includes(await $.session.id())).catch(() => false)
+      await update($, bannerOn, () => isBannerOn)
       const isStepsHere = await stepsOffSessions($).then(async off => !off.includes(await $.session.id())).catch(() => false)
       await update($, stepsHere, () => isStepsHere)
       renamesPlans = await renamesHere($)
@@ -2781,14 +2855,11 @@ export const register: Register = (on, _options) => {
     $.clock.every(POLL_MS, () => refresh($).catch(() => undefined))
     await loadAsks($).catch(error => $.ui.toast(`vantage-point: could not load the saved issue drafts: ${String(error)}`))
     openedPane($)
-    // The frontier needs this repo, which the agent read finds, so it follows that read.
-    void readAgent($).then(() => readFrontier($)).catch(() => undefined)
-    // The agent row's zoom-out button carries the ready count, so it is read ahead.
-    void readReady($).catch(() => undefined)
-    // Sessions started together would poll in step and all miss gh's shared cache at once,
-    // so each polls at its own moment of the minute, taken from its id.
+    // Sessions started together (a release or an app restart remounts every one) would read
+    // GitHub in step and all miss gh's shared cache at once, a burst its secondary limit
+    // refuses (#117), so even the first read waits for this session's own moment.
     const id = await $.session.id().catch(() => '')
-    $.clock.after(pollPhase(id, ISSUE_POLL_MS), () => {
+    $.clock.after(pollPhase(id, FIRST_READ_SPREAD_MS), () => {
       pollGitHub($)
       $.clock.every(ISSUE_POLL_MS, () => pollGitHub($))
     })
@@ -2909,12 +2980,34 @@ export const register: Register = (on, _options) => {
     return result
   })
 
-  // A memory the agent read this turn counts as in its context.
-  on('tool.call', { tool: 'Read' }, async ($, e, next) => {
-    const path = (e as unknown as { file_path?: unknown }).file_path
-    if (typeof path === 'string' && isMemoryPath(path)) memoryReads.add(path)
-    return next(e)
-  })
+  // Each edit by any of this session's agents, subagents too, feeds the session banner (issue 119):
+  // its lines added and removed once the tool has run without error, then, off the call's path, the
+  // ADR its file answers to. Write reads the file it replaces first; an Edit's record holds the file
+  // as it was, so one that replaces every occurrence counts each.
+  for (const tool of EDIT_TOOLS) {
+    on('tool.call', { tool: tool as typeof TOOL }, async ($, e, next) => {
+      const input = e as unknown as Record<string, unknown>
+      const named = input.file_path
+      if (typeof named !== 'string' || named === '') return next(e)
+      const path = named.startsWith('/') ? named : `${(await $.session.cwd()).replace(/\/$/, '')}/${named}`
+      const replaced = tool === 'Write' ? await $.fs.read(path).then(String, () => null) : null
+      const result = await next(e)
+      if (result.deny !== undefined || result.isError === true) return result
+      try {
+        const record = (result.result ?? {}) as { originalFile?: unknown; staged?: unknown }
+        if (record.staged === true) return result
+        const before = tool === 'Write' ? replaced : typeof record.originalFile === 'string' ? record.originalFile : null
+        const delta = editDelta(tool, input, before)
+        if (delta === null) return result
+        const now = await $.clock.now()
+        await update($, bannerEdits, held => recordEdit(held, path, delta, now))
+        void governBanner($, path).catch(() => undefined)
+      } catch {
+        // The banner is an observation: a failed count never fails the edit.
+      }
+      return result
+    })
+  }
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
@@ -2930,7 +3023,6 @@ export const register: Register = (on, _options) => {
     askedThisTurn = null
     permissionThisTurn = false
     turnCards = []
-    memoryReads.clear()
     if (e.agentId === undefined) renamesPlans = await renamesHere($)
     await takeState($).catch(() => undefined)
     // The row waits for the person: their message or a press clears it, never a turn they did not
@@ -2947,15 +3039,18 @@ export const register: Register = (on, _options) => {
       await update($, notify, () => [])
       await update($, capture, () => null)
       await update($, steps, () => [])
+      await update($, bannerEdits, () => [])
+      await update($, bannerAdrs, () => ({}))
+      await update($, bannerPlaced, () => ({}))
     }
     return next(e)
   })
 
   on('command.run', { command: 'vantage-point' }, async ($, e) => {
     const mode = e.args.trim().toLowerCase()
-    if (mode === 'palette' || mode.startsWith('palette ')) return { text: await openPalette($, mode.slice('palette'.length).trim()) }
-    if (mode === 'album' || mode.startsWith('album ')) return { text: await openAlbum($, mode.slice('album'.length).trim()) }
-    if (mode === 'grade') return { text: await openGrading($) }
+    if (DEV_PANES && (mode === 'palette' || mode.startsWith('palette '))) return { text: await openPalette($, mode.slice('palette'.length).trim()) }
+    if (DEV_PANES && (mode === 'album' || mode.startsWith('album '))) return { text: await openAlbum($, mode.slice('album'.length).trim()) }
+    if (DEV_PANES && mode === 'grade') return { text: await openGrading($) }
     if (mode === 'tour') return { text: await openTour($) }
     if (mode === 'keep-warm') {
       const id = await $.session.id()
@@ -2969,6 +3064,7 @@ export const register: Register = (on, _options) => {
       return { text: 'Caches opened.' }
     }
     if (mode === 'steps') return { text: await toggleSteps($) }
+    if (mode === 'banner') return { text: await toggleBanner($) }
     if (mode === 'native' || mode === 'picture') await update($, cardMode, () => mode)
     await openPane($)
     return { text: await summary($, await openRequests($), await read($, github)) }
@@ -3043,13 +3139,14 @@ export const register: Register = (on, _options) => {
   on('tool.call', { tool: SHOW_TOOL as typeof TOOL }, async ($, e) => {
     const input = e as unknown as { pane?: unknown; page?: unknown }
     const page = typeof input.page === 'string' ? input.page.trim().toLowerCase() : ''
-    if (input.pane === 'palette') return { result: await openPalette($, page) }
-    if (input.pane === 'album') return { result: await openAlbum($, page) }
-    if (input.pane === 'grading') return { result: await openGrading($) }
+    if (DEV_PANES && input.pane === 'palette') return { result: await openPalette($, page) }
+    if (DEV_PANES && input.pane === 'album') return { result: await openAlbum($, page) }
+    if (DEV_PANES && input.pane === 'grading') return { result: await openGrading($) }
     if (input.pane === 'tour') return { result: await openTour($) }
     if (input.pane === 'steps') return { result: await toggleSteps($) }
     if (input.pane === 'deck-facts') return { result: await toggleDeckFacts($) }
-    return { result: 'Not opened: pane is "palette", "album", "grading", "steps", "deck-facts" or "tour".' }
+    if (input.pane === 'banner') return { result: await toggleBanner($) }
+    return { result: `Not opened: pane is ${DEV_PANES ? '"palette", "album", "grading", ' : ''}"steps", "deck-facts", "banner" or "tour".` }
   })
 
   // The steps tool only forwards to the app's update_plan, which the app lists in the session's
@@ -3189,21 +3286,11 @@ export const register: Register = (on, _options) => {
     return next(e)
   })
 
-  // The keyboard leaving the native card's comment field for anything else in the
-  // pane saves what was typed, and the field rests as wrapped text.
-  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
-    if ((await read($, cardMode)) === 'native') {
-      const typing = e.element === 'comment'
-      if (!typing) await flushDraft($)
-      await update($, commentTyping, () => typing)
-    }
-    return next(e)
-  })
 
   on('ui.message', { requestId: PANE }, async ($, e) => {
     if (e.element === 'comment-rest') {
       // A click on a saved comment brings the Input back, with the keyboard in it.
-      await update($, commentTyping, () => true)
+      await setCommentOpen($, true)
       await $.ui.focus({ requestId: PANE, key: 'comment' }).catch(() => undefined)
       return {}
     }
@@ -3418,7 +3505,9 @@ export const register: Register = (on, _options) => {
     // Cells before a title: the band's padding, the label column, the dot and the number, each with its gap.
     const lead = 2 + labelWidth + 1 + 1 + 1 + (chipWidth === 0 ? 0 : chipWidth + 1)
     const showsBook = e.props.view.agentId === undefined && Svg !== undefined
-    const agentRoom = titleRoom(e.props.bodyColumns - lead, showsBook ? [readyText, '📖'] : [readyText], perCell)
+    // The session banner (issue 119): its pill once this session has an edit; the strip, drawn below.
+    const edited = showsBook ? await read($, bannerEdits) : []
+    const agentRoom = titleRoom(e.props.bodyColumns - lead, showsBook ? [readyText, ...(edited.length > 0 ? ['👁️'] : []), '📖'] : [readyText], perCell)
     const followUp = 'Needs follow-up:'
     const youRoom = titleRoom(e.props.bodyColumns - lead - (isFollowUp ? Math.ceil(followUp.length / perCell) + 1 : 0), [waitingText], perCell)
     const close = () => update($, peek, () => null)
@@ -3577,13 +3666,34 @@ export const register: Register = (on, _options) => {
     bandSeen = { maxRows: e.props.maxRows, columns: e.props.bodyColumns }
     // The card's first line, cut at a word to what its Open task and Close leave of the band's columns.
     const firstLine = Math.max(8, Math.floor((e.props.bodyColumns - 6 - 2 * (PILL_CELLS + 1) - Math.ceil('Open task Close'.length / perCell)) * perCell) - 1)
-    const stepLines = cardLines(
-      e.props.maxRows,
-      2 + (team.length === 0 ? 0 : 1) + (showing === null ? 0 : 1),
-      (teamOpen ? Math.min(team.length, ROOM + 1) : 0) + (showing === null ? 0 : showing.options.length),
-    )
+    const pillRows = 2 + (team.length === 0 ? 0 : 1) + (showing === null ? 0 : 1)
+    const textLines = (teamOpen ? Math.min(team.length, ROOM + 1) : 0) + (showing === null ? 0 : showing.options.length)
+    // The strip draws at its own height above everything, and the band scrolls to hold it: the owner
+    // found a strip cut to the band's spare rows too scrunched and accepted the scroll (issue 119).
+    const stripWidth = bannerWidth(e.props.bodyColumns)
+    const placedAt = await read($, bannerPlaced)
+    // A width this session has not drawn at yet keeps the latest layout's order of columns.
+    const current = Object.entries(placedAt).filter(([k]) => k.startsWith(`${BANNER_LAYOUT}-`))
+    const heldPlaced = placedAt[`${BANNER_LAYOUT}-w${stripWidth}`] ?? current.at(-1)?.[1] ?? null
+    // The rows under the strip, so its height puts the window's edge between two of them; none while a
+    // card is open, whose height the band does not know.
+    const cardOpen = (shown === 'human' && first !== undefined && openFirst !== null) || (shown === 'agent' && work !== null)
+    const bandRows: BandRow[] = [
+      ...(showing === null ? [] : ['pill' as const, ...showing.options.map(() => 'text' as const)]),
+      'pill',
+      ...(team.length === 0 ? [] : ['pill' as const, ...Array.from({ length: teamOpen ? Math.min(team.length, ROOM + 1) : 0 }, () => 'text' as const)]),
+      'pill',
+    ]
+    const strip = edited.length > 0 && (await read($, bannerOn)) ? banner(edited, await read($, bannerAdrs), heldPlaced, stripWidth, cardOpen ? null : { maxRows: e.props.maxRows, rows: bandRows }) : null
+    // Only a node new to the strip, or a width it was not placed at, moves anything: then the places are kept for the next redraw.
+    if (strip !== null && strip.placed !== heldPlaced) {
+      const key = `${BANNER_LAYOUT}-w${stripWidth}`
+      void update($, bannerPlaced, held => Object.fromEntries([...Object.entries(held).filter(([k]) => k !== key && k.startsWith(`${BANNER_LAYOUT}-`)).slice(-(BANNER_WIDTHS_KEPT - 1)), [key, strip.placed]])).catch(() => undefined)
+    }
+    const stepLines = cardLines(e.props.maxRows, pillRows, textLines)
     return (
       <Box flexDirection="column" rowGap={2} paddingX={1}>
+        {strip === null || Svg === undefined ? null : <Svg key="hq-banner" source={strip.svg} width={strip.width} height={strip.height} alt={strip.alt} />}
         {first === undefined || openFirst === null
           ? null
           : card('human', label(first), gist(first.body), { label: 'Open in human queue', run: openFirst })}
@@ -3633,10 +3743,12 @@ export const register: Register = (on, _options) => {
             ]),
           ],
           // The Reader's one entry (issues #34, #35, #41): a book in a grey pill at the agent row's far
-          // right, the ready count to its left. The owner picked the book over a word, so the top row
-          // keeps its width; no monochrome book draws on the desktop.
+          // right, the ready count leading the row's pills and the banner's eye between them (issue 119).
+          // The owner picked the book over a word, so the top row keeps its width; no monochrome book
+          // draws on the desktop.
           [
             <Button key="open-ready" label={readyText} variant="secondary" onPress={() => openReady($)} />,
+            edited.length > 0 ? <Button key="open-banner" label="👁️" variant="secondary" onPress={() => toggleBanner($).then(() => undefined)} /> : null,
             showsBook ? <Button key="open-reader" label="📖" variant="secondary" onPress={openReader} /> : null,
           ],
         )}
@@ -3715,17 +3827,7 @@ export const register: Register = (on, _options) => {
           await log(`select ${value}`)
         },
       },
-      {
-        pointer: <Client key="pointer" width="100%" module="../panes/palette/pointer.tsx" props={{ line: REST_LINE }} />,
-        inner: [
-          { name: 'button', node: <Client key="inner-button" width={84} module="../panes/palette/inner.tsx" props={{ kind: 'button' }} /> },
-          { name: 'select', node: <Client key="inner-select" width={84} module="../panes/palette/inner.tsx" props={{ kind: 'select' }} /> },
-          { name: 'link', node: <Client key="inner-link" width={84} module="../panes/palette/inner.tsx" props={{ kind: 'link' }} /> },
-          { name: 'markdown', node: <Client key="inner-markdown" width={84} module="../panes/palette/inner.tsx" props={{ kind: 'markdown' }} /> },
-          { name: 'code', node: <Client key="inner-code" width={84} module="../panes/palette/inner.tsx" props={{ kind: 'code' }} /> },
-        ],
-        fault: <Client key="fault" width={84} height={3} module="../panes/palette/fault.tsx" />,
-      },
+      { pointer: null as unknown as RenderElement, inner: [], fault: null as unknown as RenderElement },
       { version, newProps: takesNewProps(base) },
     )
   })
@@ -3806,7 +3908,7 @@ export const register: Register = (on, _options) => {
   // The palette command's own row in the transcript holds one member of the
   // palette's hover scope, so a shot shows a group lighting across sites.
   on('ui.render', { component: 'CommandOutput' }, async ($, e, next) => {
-    if (e.props.command !== 'vantage-point' || !e.props.args.trim().toLowerCase().startsWith('palette')) return next(e)
+    if (!DEV_PANES || e.props.command !== 'vantage-point' || !e.props.args.trim().toLowerCase().startsWith('palette')) return next(e)
     const { Box, Text } = $.ui.resolve(e)
     return (
       <Box key="palette-row" flexDirection="column">
@@ -4092,56 +4194,13 @@ export const register: Register = (on, _options) => {
     if (held === null) return <Text dimColor>No decision is open.</Text>
     const at = await read($, deckPage)
     const cwd = await $.session.cwd()
-    const sources = held.sources ?? []
     const replied = await read($, replyTickets)
     const cards = await read($, ticketStates)
     const openRows = await read($, ticketOpen)
     const fileOf = fileUrl(cwd)
     const newProps = takesNewProps(await engineBase($))
-    // A citation is a chip naming its file and line; a press opens those lines under its sentence (#108).
+    // An argument's chip opens the lines its call printed under its claim (#110).
     const openQuote = await read($, deckQuote)
-    // A chip is its source's name at its sentence's end; a press opens the quote under that sentence, another closes it (#108).
-    const chipped = (key: string, field: 'why' | 'reason', text: string) => {
-      const nodes: RenderChildren[] = []
-      let run: string[] = []
-      let hrefs: string[] = []
-      const flush = () => {
-        if (run.length === 0) return
-        const at = nodes.length
-        nodes.push(
-          <Markdown key={`${key}-${at}`} text={run.join(' ')} dimColor pressableLinks={hrefs}
-            onLinkPress={link => void update($, deckQuote, open => {
-              const which = link.href.split('#').pop() ?? ''
-              return open === which ? null : which
-            })} />,
-        )
-        run = []
-        hrefs = []
-      }
-      citedSentences(text).forEach((sentence, i) => {
-        const named = sentence.cites.filter(n => sources[n - 1] !== undefined)
-        const links = named.map(n => {
-          const href = `${fileOf(sources[n - 1]!.path)}#${field}-${i}-${n}`
-          hrefs.push(href)
-          return `[${sourceName(sources[n - 1]!)}](${href})`
-        })
-        // The chips sit in brackets before the sentence's stop, so a name never reads as the next sentence's first word.
-        const stop = /[.!?]$/.exec(sentence.text)?.[0] ?? ''
-        run.push(links.length === 0 ? sentence.text : `${sentence.text.slice(0, sentence.text.length - stop.length)} (${links.join(', ')})${stop}`)
-        const open = named.find(n => openQuote === `${field}-${i}-${n}`)
-        if (open === undefined) return
-        flush()
-        const source = sources[open - 1]!
-        nodes.push(
-          // The lines themselves, as the file holds them: the chip already names the file and line.
-          <Box key={`deck-quote-${field}-${i}`} flexDirection="column" borderStyle="round" borderColor={CARD_LINE} backgroundColor={FILL} paddingX={1}>
-            <Text wrap="wrap" {...(newProps ? { mono: true } : {})}>{source.quote}</Text>
-          </Box>,
-        )
-      })
-      flush()
-      return <Box key={key} flexDirection="column" rowGap={1}>{nodes}</Box>
-    }
     const md = (key: string, text: string, dim = false) => <Markdown key={key} text={text} dimColor={dim} />
     type Block = { node: RenderChildren }
     const recommended = held.options[held.recommend]!
@@ -4155,8 +4214,8 @@ export const register: Register = (on, _options) => {
           alt="The call at the centre, its options around it, and the ADRs and code areas each option touches" />
       </Box>
     ) }
-    // The composer's page of the call (#100, #102): its facts, its comparison and its sources, as tiles.
-    const composedItem = Svg === undefined ? null : composeDecision({ ...held, facts: deckPageFacts(held) })
+    // The composer's page of the call (#100, #102): its facts, as tiles.
+    const composedItem = Svg === undefined ? null : composeDecision({ ...held, facts: deckFacts(held.facts) })
     const pictureBlocks: Block[] = composedItem === null || Svg === undefined ? [] : deckPictures(
       { Box, Text, Button, Svg, Link: elements.Link, Markdown },
       {
@@ -4249,22 +4308,16 @@ export const register: Register = (on, _options) => {
         </Box>
       ) }
     })
-    // The band's grammar (#107): the question, then its options on dots, the recommended one first and green with its
-    // reason under it. The answer is that option, so no line restates it (the owner, 2026-10-27: "Why is there two
-    // things that basically say the same thing?").
+    // The band's grammar (#107): the question, which is the first step a yes starts, then its options on dots, the
+    // recommended one first and green. Nothing under them says the call again: no reason, no why, no Do this next
+    // (the owner's ruling on #123: "The do this next is what I find myself reading").
     const decisionBlocks: Block[] = [
       { node: md('deck-question', `### ${held.headline}`) },
       { node: (
         <Box key="deck-options" flexDirection="column" paddingLeft={2}>
-          {/* The reason hangs on the option's own text edge, in a column beside the dot. */}
-          {/* The dot sits on the option's own line, not the middle of the option and its reason. */}
           <Box key="deck-recommended" flexDirection="row" columnGap={1} alignItems="flex-start">
             <Text color={RECOMMENDED}>●</Text>
-            <Box flexDirection="column" flexShrink={1}>
-              <Text wrap="wrap">{recommended}</Text>
-              {/* With the arguments drawn, they are the reasons: a reason line would say them again (#110's design review). */}
-              {held.reason === undefined || isFacts ? null : chipped('deck-reason', 'reason', held.reason)}
-            </Box>
+            <Text wrap="wrap">{recommended}</Text>
           </Box>
           {alternatives.map((option, i) => (
             <Box key={`deck-alt-${i}`} flexDirection="row" columnGap={1}>
@@ -4274,16 +4327,7 @@ export const register: Register = (on, _options) => {
           ))}
         </Box>
       ) },
-      // Why it matters follows the options, so nothing stands between the question and its answers.
-      ...(isFacts ? argumentBlocks : held.why === undefined ? [] : [{ node: chipped('deck-why', 'why', held.why) }]),
-      // What a yes starts, in place of a box that named the recommended option a second time (the owner, 2026-10-27, #107).
-      ...(held.next === undefined ? [] : [{ node: (
-        <Box key="deck-next" flexDirection="column">
-          {/* Caption size, as a tile's title is drawn, so the label never reads as one more dim option. */}
-          <Text dimColor {...(newProps ? { size: 'caption' as const } : {})}>Do this next</Text>
-          <Text wrap="wrap">{held.next}</Text>
-        </Box>
-      ) }]),
+      ...(isFacts ? argumentBlocks : []),
       // The call's snapshot (issue 81): its options over the ADRs and code areas they touch; then the evidence.
       // The arguments are the call's evidence, so its snapshot and catalog pictures give way to them.
       ...(isFacts || shotBlock === null ? [] : [shotBlock]),
@@ -4438,6 +4482,16 @@ export const register: Register = (on, _options) => {
         <Button key="redo" label={`↷ Redo${hint('E')}`} hotkey="e" dimColor={history.redo === 0} onPress={press('redo')} />
       </>
     )
+    // The plate's Undo, there so Q takes back a submit: the ask page's plain words, the desktop's own
+    // badge for the letter, and Redo only once there is something to redo (the design review, 2026-10-29).
+    const badge = (key: string) => (e.surface === 'desktop' ? '' : hint(key))
+    const plateHistory =
+      history.undo + history.redo === 0 ? null : (
+        <Box flexDirection="row" columnGap={1}>
+          {history.undo === 0 ? null : <Button key="undo" label={`Undo${badge('Q')}`} hotkey={e.surface === 'desktop' ? undefined : 'q'} plain dimColor onPress={press('undo')} />}
+          {history.redo === 0 ? null : <Button key="redo" label={`Redo${badge('E')}`} hotkey={e.surface === 'desktop' ? undefined : 'e'} plain dimColor onPress={press('redo')} />}
+        </Box>
+      )
 
     if (request === undefined && Svg !== undefined) {
       return (
@@ -4519,6 +4573,7 @@ export const register: Register = (on, _options) => {
             submissions,
             takesNewProps(await engineBase($)),
           )}
+          {plateHistory}
           {trouble}
         </Box>
       )
@@ -4553,6 +4608,7 @@ export const register: Register = (on, _options) => {
               ))}
             </Box>
             {submissions}
+            {plateHistory}
             {trouble}
           </Box>
         </Box>
@@ -4586,6 +4642,7 @@ export const register: Register = (on, _options) => {
             ))}
           </Box>
           {submissions}
+          {plateHistory}
           {trouble}
         </Box>
       )
@@ -4669,41 +4726,44 @@ export const register: Register = (on, _options) => {
     }
 
     if ((await read($, cardMode)) === 'native' && e.surface === 'desktop') {
-      const target = draftKey({ request: qidOf(request), item: index, heading: item?.heading ?? null })
       const stored = (item === undefined ? request.note : item.comment) ?? ''
-      const typing = await read($, commentTyping)
-      // While you type, or while the field is empty, it is the desktop's own Input, drawn
-      // straight in the pane, where it draws its own outline and full focus ring. The
-      // desktop fixes its width (about 20 characters, whatever its container) and plugins
-      // cannot change it. Its value is the stored comment, the same on every redraw, so a
-      // redraw never moves the cursor; the draft lives in `drafts` until it is saved. A
-      // saved comment at rest is text wrapped across the pane, and the Input keeps its
-      // height on a click.
-      // The rows a saved comment takes at rest, its frame's border included, which the
-      // Input keeps on a click so the field never shrinks under the pointer.
-      const restRows = stored === '' ? 1 : Math.min(6, Math.max(1, Math.ceil(stored.length / Math.max(1, (e.props.bodyColumns - 4) * 1.4)))) + 1
-      const commentField =
-        !typing && stored !== '' ? (
-          Client === undefined ? null : <Client key="comment-rest" width="100%" module="../panes/human-queue/comment.tsx" props={{ text: stored }} />
-        ) : Input === undefined ? null : (
-          <Box key="comment-slot" minHeight={restRows}>
+      // The comment is typed in the pane (ADR 0047): Comment opens the desktop's own Input, which saves only on
+      // Save or Enter, or with a verdict; Cancel drops what was typed. Focus leaving it changes nothing.
+      const isOpen = await isCommentOpen($)
+      const draftAt = draftKey({ request: qidOf(request), item: index, heading: item?.heading ?? null })
+      const pressed = (action: Action) => (p: { surface: RenderSurface }) => void pressNative($, action, p.surface, 'button')
+      // Comment is always the button; what it opens, the field, takes the row under it, where a saved comment rests.
+      const commentField = <Button key="comment-button" label={item === undefined ? 'Note' : 'Comment'} onPress={pressed('comment')} />
+      const commentRest =
+        isOpen && Input !== undefined ? (
+          <Box key="comment-slot" flexDirection="row" columnGap={1} alignItems="center">
             <Input
               key="comment"
               placeholder={item === undefined ? 'Add a note for the agent' : 'Add a comment'}
-              value={stored}
+              // What was typed and not saved, so a redraw while the agent works never takes it back
+              // to the saved comment (the owner, 2026-10-29: "my progress gets reset every n seconds").
+              value={drafts.get(draftAt) ?? stored}
               submitLabel="Save"
               onInput={value => {
-                drafts.set(target, value)
+                drafts.set(draftAt, value)
               }}
               onSubmit={async value => {
-                // Enter saves the comment and hands the keys back to the verdicts.
-                drafts.set(target, value)
+                drafts.set(draftAt, value)
                 if (!(await flushDraft($))) return
-                await update($, commentTyping, () => false)
-                await $.ui.focus({ requestId: PANE, key: 'yes' }).catch(() => undefined)
+                await setCommentOpen($, false)
+              }}
+            />
+            <Button
+              key="cancel-comment"
+              label="Cancel"
+              onPress={() => {
+                drafts.delete(draftAt)
+                void setCommentOpen($, false)
               }}
             />
           </Box>
+        ) : stored === '' || Client === undefined ? null : (
+          <Client key="comment-rest" width="100%" module="../panes/human-queue/comment.tsx" props={{ text: stored }} />
         )
       const card: NativeCard = {
         source: request.issue === undefined ? `${project} · ${FILE}` : `${request.issue.repo.split('/')[1] ?? request.issue.repo}#${request.issue.number}`,
@@ -4720,38 +4780,46 @@ export const register: Register = (on, _options) => {
         index,
         columns: e.props.bodyColumns,
         rows: paneRows,
-        resting: !typing && stored !== '',
+        resting: !isOpen && stored !== '',
         mono: takesNewProps(await engineBase($)),
       }
       // The card gets the rows the body leaves it: the back arrow and dots, the ask's title and setup above,
       // the comment and the buttons below. Lines are measured at about 7pt a character in the pane's width (#100).
       const lineRows = (text: string) => (text === '' ? 0 : Math.ceil((text.length * 7) / Math.max(140, (e.props.bodyColumns - 2) * 7.8)) + 1)
-      // The item's pictures, under its text: the first drawn to the pane's width and at most
-      // about half its height, the rest a count on the button that opens them all (issue 87).
+      // The item's pictures, under its text, each drawn to its share of the pane's width (issue 87).
       const shown = picturesFor(request, item)
       // A picture opens full size here, in the pane, never as a thumbnail or in another app (the owner, 2026-10-23, #102).
-      const pictureKey = `${request.id}#${item?.index ?? 0}`
+      const pictureKey = await proseKey($, `${request.id}#${item?.index ?? 0}`)
       const viewing = (await read($, composedView)).viewing
       const open = viewing?.item === pictureKey && viewing.index < shown.length ? viewing.index : null
       const view$ = (index: number | null) => void update($, composedView, v => ({ ...v, viewing: index === null ? null : { item: pictureKey, index } }))
       const root = await $.session.cwd()
       const states = shown.map(one => pictureOf($, one.url, root))
       const first = states[0]
-      const room = Math.round(Math.max(20, e.props.bodyColumns - 2) * 7.8)
+      const room = cardWidth(e.props.bodyColumns)
       // Every picture the item carries draws on the page, two to a row when there are several, so the
       // person sees them here rather than behind Open (the owner's ruling on #90, 2026-10-23).
       const across = shown.length > 1 ? 2 : 1
       const pictureRowsOf = Math.ceil(shown.length / across)
-      const tall = Math.round((paneRows * 19 * 0.45) / Math.max(1, pictureRowsOf))
+      // A lone picture takes the rows the card leaves it, about 14 for the back arrow, dots, question and
+      // the three rows of controls (measured on the desktop, #124), so a tall mock draws as large as fits;
+      // several share about half the pane.
+      const tall = shown.length === 1 ? Math.max(Math.round(paneRows * 19 * 0.45), (paneRows - 14) * 19) : Math.round((paneRows * 19 * 0.45) / Math.max(1, pictureRowsOf))
       const cell = across === 1 ? room : Math.floor((room - 10) / 2)
       const drawn = states.map(one => {
         if (typeof one === 'string') return null
-        const size = fit(one.width, one.height, cell, tall)
+        // A tall mock fitted to the card's height would draw its text too small to read, so it keeps the card's width (#124).
+        const size = legible(one.width, one.height, cell, tall)
         const source = pictureSvg(one.base64, size.width, size.height)
         return source === null ? null : { size, source }
       })
       // An image's alt text is its Svg's alone, never a caption under it; Full size shows it in the pane (#105).
-      const fullSize = drawn.some(one => one !== null) ? <Button key="full-size" label="Full size" onPress={() => view$(Math.max(0, drawn.findIndex(one => one !== null)))} /> : null
+      // The height the full view gives a picture: the pane less its back arrow and a margin.
+      const fullTall = Math.max(8, paneRows - 4) * 19
+      // ⤢ under every picture the card draws, so it is always in one place: offered only where the full view drew it
+      // bigger, a wide screenshot never had one and the owner could not find it (#120, 2026-10-30).
+      const firstDrawn = drawn.findIndex(one => one !== null && one !== undefined)
+      const fullSize = firstDrawn < 0 ? null : <Button key="full-size" label="⤢" onPress={() => view$(firstDrawn)} />
       const pictureGrid =
         shown.length === 0 ? null : (
           <Box key="pictures" flexDirection="column" flexShrink={0} gap={1}>
@@ -4810,7 +4878,7 @@ export const register: Register = (on, _options) => {
         open === null || fullState === undefined || typeof fullState === 'string' || Svg === undefined
           ? null
           : (() => {
-              const size = fit(fullState.width, fullState.height, room, Math.max(8, paneRows - (4 + lineRows(card.title) + 1 + lineRows(card.setup) + 5) - 4) * 19)
+              const size = legible(fullState.width, fullState.height, room, fullTall)
               const source = pictureSvg(fullState.base64, size.width, size.height)
               const step = (by: number) => () => view$((open + by + shown.length) % shown.length)
               return (
@@ -4835,7 +4903,9 @@ export const register: Register = (on, _options) => {
                 </Box>
               )
             })()
-      const pressed = (action: Action) => (p: { surface: RenderSurface }) => void pressNative($, action, p.surface, 'button')
+      // At full size the pane is for looking: the picture and its own ←, no ruling under a picture whose
+      // question is off screen (the design review, 2026-10-29).
+      if (full !== null) return <Box key="native" flexDirection="column">{full}</Box>
       return nativeCard(
         { Box, Text, Button },
         card,
@@ -4849,8 +4919,9 @@ export const register: Register = (on, _options) => {
         },
         body,
         commentField,
-        full ?? pictureRow,
-        full === null ? composed : null,
+        pictureRow,
+        composed,
+        commentRest,
       )
     }
 

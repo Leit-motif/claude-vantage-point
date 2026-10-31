@@ -158,20 +158,8 @@ export type HumanQueueDecision = {
   sends?: string[]
   /** A permission ask's call (`callKey`): pressing the first option lets it run once when the agent repeats it. */
   grant?: string
-  /** Why it matters, with `[n]` citations into `sources`. */
-  why?: string
-  /** Why the recommended option, with `[n]` citations into `sources`. */
-  reason?: string
-  /** The concrete first step a yes starts, one sentence: the deck's Do this next line. */
-  next?: string
   /** The catalog techniques the fork picked to draw this decision, best first (#109). */
   picks?: string[]
-  /**
-   * Numbered sources, 1-based in the order given: a file the agent read and the lines `line` to `end` in it;
-   * `quote` is those lines as the file holds them, read by the lines check, never the fork's text (#108).
-   * `memory` marks an auto-memory file.
-   */
-  sources?: { path: string; quote: string; line?: number; end?: number; memory?: boolean }[]
   /**
    * The files and ADRs each option would change or is governed by, by option index: the
    * deck's snapshot draws them (issue 81). `superseded` marks an ADR whose status says so.
@@ -218,7 +206,7 @@ export type HumanQueuePalette = { page: HumanQueuePalettePage; log: string[]; in
 /** A page of the mock album behind `/vantage-point album` (hooks/album.tsx). */
 export type HumanQueueAlbumPage =
   | 'before' | 'tiles' | 'outcomes' | 'blocks' | 'mermaid-flow' | 'units' | 'threshold' | 'what-if' | 'tree' | 'sankey'
-  | 'flow' | 'animated' | 'sequence' | 'timeline' | 'reveal' | 'dumbbell' | 'table' | 'ledger' | 'sources' | 'glossary' | 'type' | 'cost'
+  | 'flow' | 'animated' | 'sequence' | 'timeline' | 'process' | 'reveal' | 'dumbbell' | 'table' | 'ledger' | 'sources' | 'glossary' | 'type' | 'cost'
   | 'graph' | 'floor' | 'card-2' | 'card-4' | 'context'
 
 /** The mock album's page, and the window its what-if page scores on. */
@@ -326,6 +314,16 @@ export type HumanQueueGrading = { at: number; picks: Record<string, { pick: stri
 /** What the tour's setup lines say: gh and its login, and whether this folder has a human-queue.md. */
 export type VantageTourSetup = { gh: 'signed-in' | 'signed-out' | 'missing' | 'unknown'; login: string | null; queueFile: boolean }
 
+/**
+ * The session banner's state (issue 119), as panes/banner's `Edited`, `Governing` and `Placed`:
+ * this contract imports nothing, so the shapes are repeated, and register.tsx fails to
+ * type-check if they drift.
+ */
+export type HumanQueueEdited = { path: string; added: number; removed: number; lastAt: number }
+/** `slug` and `accepted` are absent from an ADR a session recorded before the banner read them. */
+export type HumanQueueGoverning = { n: number; key: string; slug?: string; title: string; accepted?: boolean }
+export type HumanQueueBannerPlaced = { width: number; height: number; at: Record<string, { x: number; y: number; w: number; r: number }>; left: string[]; cols: [key: string, lo: number, hi: number][] }
+
 /** The kinds of cache the Caches pane's filter can leave out. */
 export type HumanQueueCacheFilter = { cold: boolean; children: boolean; merged: boolean; archived: boolean }
 
@@ -341,7 +339,8 @@ declare module 'claude-code' {
       /** How the desktop draws the item: the SVG picture, or the native card prototype (issue #45). */
       cardMode: 'picture' | 'native'
       /** The keyboard is in the native card's comment field. */
-      commentTyping: boolean
+      /** The sessions whose queue pane has its comment field open (each its own). */
+      commentOpenIn: string[]
       undo: HumanQueueUndo[]
       /** What `Q` took back, for `E` to put again; a new change clears it. */
       redo: HumanQueueUndo[]
@@ -396,6 +395,14 @@ declare module 'claude-code' {
       steps: HumanQueueStep[]
       /** True where the band draws this session's task list in place of the app's own. */
       stepsHere: boolean
+      /** Every file this session's agents edited, subagents' too, with the lines they added and removed (issue 119). */
+      bannerEdits: HumanQueueEdited[]
+      /** The ADR each edited file answers to, by its absolute path; null where none binds it. */
+      bannerAdrs: Record<string, HumanQueueGoverning | null>
+      /** Where the banner placed its nodes, by the width it drew at (`w736`), so a redraw keeps them. */
+      bannerPlaced: Record<string, HumanQueueBannerPlaced>
+      /** True while this session shows the banner: the 👁 pill, `/vantage-point banner` or the show tool turn it on. */
+      bannerOn: boolean
       /** Tickets the last reply names, in this project's repositories; cleared with the decision. */
       replyTickets: HumanQueueReplyTicket[]
       /** Each of those tickets' cards, or why it could not be read, by `owner/name#n`. */

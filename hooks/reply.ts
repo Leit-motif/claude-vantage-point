@@ -11,8 +11,8 @@ export const TONE_COLOR = { advantage: 'success', tradeoff: 'warning', neutral: 
 /** The deck's valence colours, the cache countdown's family: good, middling, bad. */
 export const VALENCE_COLOR = { advantage: '#96de81', neutral: '#dec281', tradeoff: '#de8481' } as const
 
-/** What a tone scores on the Comparison page's score row. */
-export const TONE_SCORE = { advantage: 2, neutral: 1, tradeoff: 0 } as const
+/** The most words a deck's headline holds: the first step a yes starts, asked as a question (#123). */
+export const HEADLINE_WORDS = 12
 
 const object = (value: unknown): Record<string, unknown> | null =>
   typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null
@@ -60,7 +60,7 @@ function list(value: unknown, min: number, max: number): string[] | null {
 export function parseDecision(input: unknown): Decision | null {
   const record = object(input)
   if (record === null) return null
-  const headline = words(record.headline, 8)
+  const headline = words(record.headline, HEADLINE_WORDS)
   const ask = oneSentence(record.ask)
   const options = list(record.options, 2, 3)
   const dimensions = list(record.dimensions, 2, 3)
@@ -83,12 +83,8 @@ export function parseDecision(input: unknown): Decision | null {
   const recommend = options.indexOf(line(record.recommend) ?? '')
   if (seen.size !== options.length * dimensions.length || recommend < 0) return null
   const decision: Decision = { headline, ask, options, dimensions, cells, recommend }
-  // The deck's fields are optional; one that is present must be well formed, and a
-  // citation must name a source that is there: a wrong citation is worse than none.
-  const deck = deckFields(record)
-  if (deck === null) return null
   const touches = touchesOf(record.touches, options)
-  return { ...decision, ...deck, ...(touches === null ? {} : { touches }) }
+  return { ...decision, ...(touches === null ? {} : { touches }) }
 }
 
 /**
@@ -107,40 +103,6 @@ function touchesOf(value: unknown, options: readonly string[]): Decision['touche
     }
   }
   return touches.some(paths => paths.length > 0) ? touches.map(paths => paths.map(path => ({ path }))) : null
-}
-
-function deckFields(record: Record<string, unknown>): Pick<Decision, 'why' | 'reason' | 'next' | 'sources'> | null {
-  const out: Pick<Decision, 'why' | 'reason' | 'next' | 'sources'> = {}
-  if (record.next !== undefined) {
-    const next = words(record.next, 20)
-    if (next === null || /\[\d+\]/.test(next)) return null
-    out.next = next
-  }
-  if (record.sources !== undefined) {
-    if (!Array.isArray(record.sources) || record.sources.length > 9) return null
-    const sources: NonNullable<Decision['sources']> = []
-    for (const raw of record.sources) {
-      const source = object(raw)
-      const path = line(source?.path)
-      if (path === null) return null
-      // The lines a source names, "412-418" or "412"; ones that cannot be read stay 0, and the lines check drops them (#108).
-      const range = /^\s*(\d+)\s*(?:[-–]\s*(\d+))?\s*$/.exec(typeof source?.lines === 'string' ? source.lines : String(source?.lines ?? ''))
-      const first = range === null ? 0 : Number(range[1])
-      const last = range === null ? 0 : Number(range[2] ?? range[1])
-      sources.push({ path, quote: '', line: first, end: Math.max(first, last) })
-    }
-    out.sources = sources
-  }
-  const count = out.sources?.length ?? 0
-  for (const key of ['why', 'reason'] as const) {
-    if (record[key] === undefined) continue
-    const text = words(record[key], key === 'why' ? 40 : 25)
-    if (text === null) return null
-    const cited = [...text.matchAll(/\[(\d+)\]/g)].map(m => Number(m[1]))
-    if (cited.some(n => n < 1 || n > count)) return null
-    out[key] = text
-  }
-  return out
 }
 
 /**

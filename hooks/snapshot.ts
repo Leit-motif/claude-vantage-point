@@ -1,8 +1,8 @@
-// The deck's snapshot (issue 81): the call at the centre, its options around it, and the ADRs and
+// The deck's snapshot (issue 81): the options around the call's empty centre, and the ADRs and
 // code areas each option touches, in the decision graph's look (docs/design.md): small dots, thin
 // grey links, quiet labels, colour only for a superseded ADR: the deck's option dots mark the recommendation (#107).
 import type { HumanQueueDecision } from '../types'
-import { esc } from '../panes/svg'
+import { esc, sfWidth } from '../panes/svg'
 import { adrId } from './deck'
 import { PANE, QUIET, SIGNAL_RED } from './signal'
 
@@ -15,13 +15,7 @@ type Label = { lines: string[]; x: number; y: number; anchor: 'start' | 'middle'
 const MAX_WIDTH = 420
 const SIZE = 11
 const LINE = 14
-// SF at 11px, each printable ASCII character's advance, as Chromium on this Mac measures it (canvas
-// measureText, 2026-10-19): a label's sum lands within a pixel of the drawn width.
-const SF11 = ('3.2 3.5 5.3 7.0 7.0 10.2 7.9 3.3 4.3 4.3 5.2 7.0 3.3 5.2 3.3 3.4 7.0 5.2 6.7 7.0 7.1 6.9 7.1 6.3 7.1 7.1 3.3 3.3 ' +
-  '7.0 7.0 7.0 5.7 10.2 7.5 7.3 7.9 8.1 6.6 6.4 8.3 8.2 3.0 6.0 7.3 6.3 9.7 8.2 8.6 7.0 8.6 7.2 7.1 7.0 8.2 7.5 10.7 7.5 7.3 ' +
-  '7.3 4.3 3.4 4.3 7.0 6.5 5.6 6.1 6.8 6.2 6.8 6.3 4.0 6.8 6.5 2.8 2.8 6.0 2.9 9.6 6.5 6.6 6.8 6.8 4.2 5.8 4.1 6.5 6.0 8.6 5.8 ' +
-  '6.0 6.0 4.3 2.9 4.3 7.0').split(' ').map(Number)
-const textWidth = (text: string) => [...text].reduce((sum, c) => sum + (SF11[c.charCodeAt(0) - 32] ?? 7), 0) * (SIZE / 11)
+const textWidth = (text: string) => sfWidth(text, SIZE)
 /** Labels keep this much clear space between them, so two never read as one. */
 const GAP = 6
 /** A label in one line, or in two split near the middle: at a space, or after a slash in a path. */
@@ -208,10 +202,13 @@ function arrange(decision: HumanQueueDecision, targets: Target[], scale: number,
   return { nodes, labels, box }
 }
 
-/** The snapshot of a decision whose options touch files, at most `maxWidth` pixels wide; null when none does, or when it cannot fit. */
+/**
+ * The snapshot of a decision whose options touch files, at most `maxWidth` pixels wide; null when fewer than two
+ * options touch any, since one option's files say nothing the others do not, or when it cannot fit (#123).
+ */
 export function snapshot(decision: HumanQueueDecision, maxWidth = MAX_WIDTH): Snapshot | null {
   const targets = targetsOf(decision)
-  if (targets.length === 0) return null
+  if (new Set(targets.flatMap(target => target.options)).size < 2) return null
   let scale = 1
   // Too wide: first wrap the long labels, then draw the graph smaller.
   const tooWide = (box: Box) => box[2] - box[0] > maxWidth - 2
@@ -246,12 +243,14 @@ export function snapshot(decision: HumanQueueDecision, maxWidth = MAX_WIDTH): Sn
     const cy = round((a.y + b.y) / 2 + ny * bow)
     return `<path data-link="${esc(`${from} to ${to}`)}" ${paint} fill="none" d="M${a.x} ${a.y}Q${cx} ${cy} ${b.x} ${b.y}"/>`
   }
-  const lines = [
-    ...decision.options.map((_, i) => link('call', `option-${i}`, false)),
-    ...targets.flatMap(target => target.options.map(o => link(`option-${o}`, target.key, target.superseded))),
-  ]
-  // Every node is quiet: the call is the page's heading already, and colour is kept for a superseded ADR (#108).
-  const dots = [...at].map(([key, n]) => `<circle data-node="${esc(key)}" fill="${QUIET}" cx="${n.x}" cy="${n.y}" r="${n.r}"/>`)
+  const lines = targets.flatMap(target => target.options.map(o => link(`option-${o}`, target.key, target.superseded)))
+  // The call holds the layout's centre but draws nothing: the heading names it, and a blank dot between the options
+  // read as a third one (#123's design review). Every node is quiet, colour kept for a superseded ADR (#108), and
+  // sized by its links, as Obsidian's graph sizes them (ADR 0026).
+  const degree = (key: string) => targets.reduce((sum, target) =>
+    sum + (key === target.key ? target.options.length : target.options.filter(o => key === `option-${o}`).length), 0)
+  const dots = [...at].filter(([key]) => key !== 'call').map(([key, n]) =>
+    `<circle data-node="${esc(key)}" fill="${QUIET}" cx="${n.x}" cy="${n.y}" r="${round(2.5 + Math.min(4, degree(key)) * 0.6)}"/>`)
   const texts = labels.map(l => {
     const x = round(l.x + dx)
     const lines = l.lines.map((line, i) => (i === 0 ? esc(line) : `<tspan x="${x}" dy="${LINE}">${esc(line)}</tspan>`))

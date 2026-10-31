@@ -3,10 +3,12 @@
 // `/vantage-point picture`. It meets
 // docs/design.md: the body (panes/human-queue/native-body.tsx: a row of dots, as
 // the band's, carrying every verdict and the place, then the ask and the item's
-// card), the comment field (the desktop's own Input framed as the app's
-// composer), and a footer: ◀, No, Yes and ▶ on the leading edge, as A, S, W and
-// D sit on the keyboard, and Submit (R) alone on the trailing one, drawn on the
-// last item only, where R submits, and white once every item is answered. No and Yes are the desktop's plain
+// card), a footer: ◀, No, Yes and ▶ on the leading edge and Submit alone on the
+// trailing one, drawn on the last item only and
+// white once every item is answered. Nothing has a letter key: the pane seldom holds
+// the keyboard, so the letters typed into the chat instead (the owner, 2026-10-29).
+// Under the footer, in a row of its own so the footer stays five buttons: Comment, the
+// field it opens (the desktop's own Input), or a saved comment at rest. No and Yes are the desktop's plain
 // buttons: the dots already show each verdict's colour (the owner, 2026-10-16).
 // Its colours are the band's signals and the app's neutrals (./signal.ts).
 // Never takes `$`: register.tsx hands it the element table, the presses, the
@@ -133,6 +135,8 @@ export function nativeCard(
   comment: RenderChildren,
   pictures: RenderChildren = null,
   composed: RenderChildren = null,
+  /** A saved comment at rest, framed as the app's composer under the actions; null while there is none or it is open. */
+  rest: RenderChildren = null,
 ): RenderElement {
   const { Box, Button } = el
   const plain = card.items.length === 0
@@ -168,29 +172,35 @@ export function nativeCard(
       {/* What the item shows, which the body's Client cannot draw: a bitmap draws only in a plain Svg (issue 87). */}
       {pictures}
 
-      {card.resting ? (
+      <Box key="footer" flexDirection="row" alignItems="center" columnGap={1} flexShrink={0}>
+        {/* At either end the step that cannot move is drawn dim, as a native app dims an action that cannot act. */}
+        {plain ? null : <Button key="back" label="◀" dimColor={card.index <= 1} onPress={on.back} />}
+        {plain ? null : <Button key="no" label="No" onPress={on.no} />}
+        <Button key="yes" label={plain ? 'Done' : 'Yes'} onPress={on.yes} />
+        {rSubmits(card) ? (
+          // On the last item, where ▶ has nowhere to go, it is Submit, as the return glyph (the owner, 2026-10-29);
+          // white only once every item is answered (the owner, 2026-10-17), the standard grey until then.
+          <Button key="r" variant={card.items.every(one => one.verdict !== null) ? 'primary' : 'secondary'} label="⏎" onPress={on.r} />
+        ) : (
+          <Button key="next" label="▶" onPress={on.next} />
+        )}
+      </Box>
+
+      <Box key="actions" flexDirection="row" flexShrink={0}>
+        {comment}
+      </Box>
+
+      {/* The field Comment opens, on a row of its own, or the saved comment at rest there, framed as the
+          app's composer: under Comment, never beside it, where it ran off the pane (the owner, 2026-10-29). */}
+      {rest === null ? null : card.resting ? (
         <Box key="comment-row" borderStyle="round" borderColor={PALETTE.rest} backgroundColor={PALETTE.fill} paddingX={1} flexShrink={0}>
-          {comment}
+          {rest}
         </Box>
       ) : (
         <Box key="comment-row" flexShrink={0}>
-          {comment}
+          {rest}
         </Box>
       )}
-
-      <Box key="footer" flexDirection="row" justifyContent="space-between" alignItems="center" flexShrink={0}>
-        <Box key="choices" flexDirection="row" alignItems="center" columnGap={1}>
-          {/* At either end the step that cannot move is drawn dim, as a native app dims an action that cannot act. */}
-          {plain ? null : <Button key="back" hotkey="a" label="◀" dimColor={card.index <= 1} onPress={on.back} />}
-          {plain ? null : <Button key="no" hotkey="s" label="No" onPress={on.no} />}
-          <Button key="yes" hotkey="w" label={plain ? 'Done' : 'Yes'} onPress={on.yes} />
-          {plain ? null : <Button key="next" hotkey="d" label="▶" dimColor={card.index >= card.items.length} onPress={on.next} />}
-        </Box>
-        {rSubmits(card) ? (
-          // White only once every item is answered (the owner, 2026-10-17); the standard grey until then.
-          <Button key="r" hotkey="r" variant={card.items.every(one => one.verdict !== null) ? 'primary' : 'secondary'} label="Submit" onPress={on.r} />
-        ) : null}
-      </Box>
     </Box>
   )
 }

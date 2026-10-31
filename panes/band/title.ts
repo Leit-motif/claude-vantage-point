@@ -3,6 +3,12 @@ const DANGLING = new Set(['a', 'an', 'the', 'and', 'or', 'of', 'to', 'for', 'in'
 
 /** Characters of the band's text one cell holds on the desktop: a title's character is about 6pt, a cell about 8pt (2026-10-17). A terminal's cell holds one. */
 export const DESKTOP_CHARS_PER_CELL = 1.3
+/**
+ * A cell of the band across, in points: the label column's 9 cells and a gap put the agent dot
+ * 88pt in, and 85 columns less the band's padding spanned the 733pt from the label column to the
+ * pills' trailing edge (a desktop shot, 2026-10-28, issue 119), the card lab's measure too (#103).
+ */
+export const DESKTOP_CELL_PT = 8.8
 /** Cells a pill takes beyond its label: the desktop button's padding, about 16pt (2026-10-17). */
 const PILL_PADDING = 2
 

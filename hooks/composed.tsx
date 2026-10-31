@@ -330,16 +330,15 @@ export function composedCard(
           images?.node ?? null,
         ]
       )}
-      {/* Unkeyed, so the page is the hover scope that shows the line (docs/palette.md, Hover). */}
       <Box flexDirection="row" columnGap={1} alignItems="center">
         {/* Named for what a press shows: the item's full text, or the pictures again (the design review, 2026-10-23). */}
-        <Button key="prose-toggle" label={input.proseOpen ? 'Pictures' : 'Full text'} onPress={on.prose} />
+        {/* A glyph for what a press shows: 📄 the item's full text, 🖼️ the pictures again; 📖 stays the Reader's (the owner, 2026-10-29). */}
+        <Button key="prose-toggle" label={input.proseOpen ? '🖼️' : '📄'} onPress={on.prose} />
         {input.proseOpen ? null : (input.beside ?? null)}
-        {/* Shown while the pointer is over the page, so the owner can say what the composer got wrong. */}
-        <Box display="none" hover={{ display: 'flex' }} flexShrink={1} minWidth={0}>
-          <Text dimColor wrap="truncate-end">
-            {explainPage(p, pg)}
-          </Text>
+        {/* Which plan drew the page, kept in the tree for the tests and the card lab and never drawn:
+            on hover it read as noise beside the controls (the owner, 2026-10-29). */}
+        <Box display="none">
+          <Text dimColor>{explainPage(p, pg)}</Text>
         </Box>
       </Box>
     </Box>

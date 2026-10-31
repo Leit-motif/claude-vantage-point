@@ -12,7 +12,7 @@
 // calls that read and answer issues live in issues.ts.
 
 import type { HumanQueueIssue, HumanQueueIssueMeta } from '../../types'
-import { overBudget, parseFacts, type Facts, type SchemaError } from '../visuals/facts.ts'
+import { overBudget, parseFacts, unsaid, type Facts, type SchemaError } from '../visuals/facts.ts'
 import { picturesOf, withoutPictures } from './pictures.ts'
 
 export type Verdict = 'yes' | 'no'
@@ -906,8 +906,8 @@ export const CARD_PICTURES = 2
  * `vantage-facts` block with `answers`, which the composer reads and the card
  * never draws; at least one picture, a fact kind or an embedded image, and at
  * most two; no so-what or why line, which the card no longer draws; a question
- * written as the recommendation, so Yes takes it; and facts within the word
- * budget. A plain ask has no items, so nothing here.
+ * written as the recommendation, so Yes takes it; facts within the word
+ * budget; and no picture of what the full text never says. A plain ask has no items, so nothing here.
  */
 export function uncomposedItems(request: Pick<Request, 'items'>): Uncomposed[] {
   return request.items.flatMap(item => {
@@ -923,6 +923,7 @@ export function uncomposedItems(request: Pick<Request, 'items'>): Uncomposed[] {
       ...(facts.answers?.why === undefined ? [] : ['answers.why is no longer drawn: let a picture carry why, or leave it to the full text']),
       ...(facts.answers?.recommend === 'no' ? ['the question recommends no: write it as what you recommend, so Yes takes it'] : []),
       ...overBudget(facts, prose(withoutPictures(item.body)).split(/\s+/).filter(Boolean).length),
+      ...unsaid(facts, `${item.heading} ${prose(item.body)}`).map(one => `facts.${one.kind} draws what the full text never says (${one.missing.slice(0, 5).join(', ')}): picture what the text says, a narrated process as steps or flow, or say it in the text`),
     ]
     return missing.length === 0 && over.length === 0 ? [] : [{ heading: item.heading, missing, over }]
   })

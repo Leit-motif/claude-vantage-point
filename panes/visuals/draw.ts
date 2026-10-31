@@ -548,6 +548,32 @@ export function timeline(steps: F['steps'], width: number, quiet = false): Pictu
 }
 
 /**
+ * A process, top to bottom (the owner, 2026-10-29: a narrated workflow is a
+ * process diagram): a spine of steps, an arrow from each to the next, each
+ * step's `when` in a quiet column beside its `what`, wrapped rather than cut.
+ * Nothing reaches the right edge, so a frame wider than the page's estimate
+ * shows no slack.
+ */
+export function processDiagram(steps: F['steps'], width: number): Picture {
+  const w = fitTile(width)
+  const x0 = 6
+  const col = Math.max(...steps.map(s => textWidth(s.when, SMALL))) + 14
+  const said = steps.map(s => wrap(capital(s.what), w - 22 - col))
+  const gap = 14
+  let y = 14
+  let body = arrowDefs
+  steps.forEach((s, i) => {
+    body += `<circle cx="${x0}" cy="${y - 4}" r="4" fill="${QUIET}"/>` + t(22, y, s.when, { size: SMALL, fill: QUIET })
+    const [text, last] = lines(22 + col, y, said[i]!)
+    body += text
+    const next = last + 16 + gap
+    if (i < steps.length - 1) body += line(x0, y + 4, x0, next - 12)
+    y = i < steps.length - 1 ? next : last
+  })
+  return svg(w, y + 6, body, `Process: ${steps.map(s => `${s.when}, ${s.what}`).join('; ')}`)
+}
+
+/**
  * The second option against the first on one honest scale: how much better
  * (left) or worse (right) it does on each row, as a share of the first's value.
  * Each row prints both values, so the bar is never the only source of a number.
@@ -713,6 +739,7 @@ export const PICTURES: Readonly<Record<string, (p: PictureInput) => Picture>> = 
   flow: p => flow((p.facts as F).flow, p.room),
   // As a support the timeline lifts nothing, so the lead stays the one bright thing.
   timeline: p => timeline((p.facts as F).steps, p.room, p.lead !== undefined && p.lead !== 'timeline'),
+  process: p => processDiagram((p.facts as F).steps, p.room),
   'diff-bars': p => diffBars((p.facts as F).comparison, p.room),
   weight: p => weight((p.facts as F).evidence, p.facts.answers?.recommend, p.room),
   reach: p => reach((p.facts as F).impact, p.facts.answers?.recommend, p.room),

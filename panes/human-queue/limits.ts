@@ -28,6 +28,17 @@ export type PauseIO = {
   now: () => Promise<number>
   load: (budget: Budget) => Promise<unknown>
   save: (budget: Budget, hold: Hold) => Promise<void>
+  /** Writes down a refusal: which call GitHub refused, and what it said. */
+  note?: (refusal: Refusal) => Promise<void>
+}
+
+/** One call GitHub refused for a limit, as the log keeps it. */
+export type Refusal = { at: number; limit: 'primary' | 'secondary'; args: readonly string[]; said: string }
+
+/** A refusal as one line of the log: when, which limit, the call, GitHub's first line. */
+export function refusalLine(refusal: Refusal): string {
+  const said = refusal.said.split('\n').find(line => line.trim() !== '')?.trim() ?? ''
+  return `${new Date(refusal.at).toISOString()} ${refusal.limit} gh ${refusal.args.join(' ')} :: ${said}`
 }
 
 const MINUTE = 60_000
@@ -163,6 +174,9 @@ export function paced(run: Run, io: PauseIO): Run {
     const ran = await run(argv, init)
     if (ran.exitCode === 0) return ran
     const line = await noteRefusal(run, io, [budget], ran.stderr, init?.env)
-    return line === null ? ran : { ...ran, stderr: line }
+    if (line === null) return ran
+    const limit = limitOf(ran.stderr)
+    if (limit !== null) await io.note?.({ at: await io.now(), limit, args: argv.slice(1), said: ran.stderr }).catch(() => undefined)
+    return { ...ran, stderr: line }
   }
 }

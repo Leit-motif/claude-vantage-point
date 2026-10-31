@@ -9,7 +9,7 @@ import type { BoxProps, ButtonProps, ElementConstructor, RenderElement, TextProp
 import type { VantageTourSetup } from '../types'
 import { SIGNAL_YELLOW } from './signal'
 
-export type TourKey = 'agent' | 'subagents' | 'decide' | 'queue' | 'reader' | 'caches' | 'palette'
+export type TourKey = 'agent' | 'subagents' | 'decide' | 'queue' | 'reader' | 'banner' | 'caches'
 
 /**
  * One stop: the feature's name, what it is, where to look once it runs, and
@@ -81,17 +81,21 @@ export const TOUR_STOPS: readonly TourStop[] = [
       'as plain prose with no list, table or code. Change nothing.',
   },
   {
+    key: 'banner',
+    name: 'Session banner',
+    does: 'Every file this session edits, its lines added and removed, tied to the ADR it answers to.',
+    look: 'Above the agent row; 👁️ beside 📖 shows or hides it.',
+    act: 'send',
+    prompt:
+      `${TOUR}, the session banner: turn the banner on with the vantage-point show tool (pane "banner"), then write a ` +
+      'scratch note of three lines to a new file in the system temporary folder, and edit it twice, changing one line each time. ' +
+      'Reply with one line. Change nothing in this project.',
+  },
+  {
     key: 'caches',
     name: 'Caches',
     does: 'Every warm prompt cache here, its minutes and hit rate; Keep warm holds one while you are away.',
     look: 'The footer shows this session’s; the pill opens them all.',
-    act: 'open',
-  },
-  {
-    key: 'palette',
-    name: 'Palette',
-    does: 'For mod builders: every element a mod can draw on the desktop.',
-    look: 'Opens beside the chat, a page per element.',
     act: 'open',
   },
 ]

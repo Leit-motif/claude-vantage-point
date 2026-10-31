@@ -31,3 +31,8 @@ export const TEXT = '#f0efec'
 export const QUIET = '#898781'
 /** The app's own merged purple, its `merged` theme key as the desktop draws it: a merged pull request (docs/palette.md). */
 export const MERGED = '#b796ff'
+
+/** The theme's `inactive`, which `dimColor` draws: the band's own labels, a step under white (docs/palette.md). */
+export const INACTIVE = '#c3c2b7'
+/** The band's ground, sampled off the app: a label's halo in a picture drawn on it (ADR 0046). */
+export const BAND = '#262625'

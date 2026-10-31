@@ -6,10 +6,9 @@ import type { SessionMessage } from 'claude-code'
 import type { HumanQueueDecision } from '../types'
 
 import { composed, FACT_KINDS, parseFacts, type Facts } from '../panes/visuals/facts'
-import { parseDecision, TONE_SCORE } from './reply'
+import { HEADLINE_WORDS, parseDecision } from './reply'
 
 export type Decision = HumanQueueDecision
-export type Source = NonNullable<Decision['sources']>[number]
 
 /** The model the gate, the compressor and the support check run on. */
 export const GATE_MODEL = 'haiku'
@@ -171,9 +170,26 @@ export function boxlessWrapUp(json: string): 'partial' | { json: string | null; 
   return { json: JSON.stringify(recap), decision: decisionOfWrapUp(input as Record<string, unknown>) }
 }
 
-/** The wrap-up box as lines of text: its question, then its buttons, the first marked. */
+/**
+ * The wrap-up box as lines of text: its question, then its buttons as their labels read, and which is the
+ * recommendation on a line of its own, since the fork copies the labels and a marked one was a different option (#121).
+ */
 const wrapUpLines = (wrap: WrapUpAsk) =>
-  [`Question: ${wrap.ask}`, ...wrap.actions.map((label, i) => `- ${label}${i === 0 ? ' (recommended)' : ''}`)].join('\n')
+  [`Question: ${wrap.ask}`, ...wrap.actions.map(label => `- ${label}`), 'The first button is the recommendation.'].join('\n')
+
+/** An option as a button's label is matched: no case, no `(recommended)` the fork copied, no stops at its edges. */
+const optionKey = (option: string) => option.toLowerCase().replace(/\(recommended\)/g, '').replace(/^[\s.,;:!?*_`"']+|[\s.,;:!?*_`"']+$/g, '')
+
+/**
+ * A deck decision whose options are the wrap-up buttons, each relabelled to its button's own words so its send
+ * matches, in the fork's order so its cells and recommendation still hold; null when they are other options.
+ */
+export function asButtons<D extends { options: readonly string[] }>(decision: D, actions: readonly string[]): D | null {
+  if (decision.options.length !== actions.length) return null
+  const options = decision.options.map(option => actions.find(label => optionKey(label) === optionKey(option)))
+  if (options.some(label => label === undefined) || new Set(options).size !== options.length) return null
+  return { ...decision, options: options as string[] }
+}
 
 /** What the gate reads: the reply's end, and the wrap-up box's question after it. */
 export function gateText(answer: string, wrap: WrapUpAsk | null): string {
@@ -189,14 +205,11 @@ export const GATE_SYSTEM =
 /** The gate's verdict from Haiku's text. */
 export const isYes = (text: string) => /^\s*yes\b/i.test(text)
 
-/** The most lines one source shows: a citation points at a passage, not a file (#108). */
-export const SOURCE_LINES = 12
-
 const SHAPE =
-  '{"headline": string, "ask": string, "why": string, "options": [string], ' +
+  '{"headline": string, "ask": string, "options": [string], ' +
   '"dimensions": [string], "cells": [{"option": string, "dimension": string, "value": string, ' +
-  '"tone": "advantage" | "neutral" | "tradeoff"}], "recommend": string, "reason": string, "next": string, ' +
-  '"sources": [{"path": string, "lines": string}], "touches": [{"option": string, "paths": [string]}], ' +
+  '"tone": "advantage" | "neutral" | "tradeoff"}], "recommend": string, ' +
+  '"touches": [{"option": string, "paths": [string]}], ' +
   '"arguments": [{"claim": string, "call": string, "fact": fact}], "picks": [string], "facts": {kind: fact}}'
 
 /**
@@ -212,12 +225,12 @@ export const DECK_FACT_KINDS = FACT_KINDS.filter(kind => !['answers', 'impact', 
 /** Techniques the deck never draws: a what-if needs the queue's answers, and a glossary is the deck's own text. */
 export const NOT_ON_DECK = new Set(['what-if', 'glossary'])
 
-/** The catalog's techniques a deck can draw: each reads a fact the fork writes, or the options' comparison (#109). */
+/**
+ * The catalog's techniques a deck can draw: each reads a fact the fork writes. None draws the options' own
+ * comparison, which restated the yes and the no beside the options (the owner's ruling on #123).
+ */
 export const DECK_TECHNIQUES = composed().filter(one =>
-  one.reads !== null && !NOT_ON_DECK.has(one.id) && (one.reads === 'comparison' || (DECK_FACT_KINDS as readonly string[]).includes(one.reads)))
-
-/** The techniques that draw the options' own comparison, from their cells: a pick of one needs no fact. */
-export const COMPARISON_VIEWS = new Set(DECK_TECHNIQUES.filter(one => one.reads === 'comparison').map(one => one.id))
+  one.reads !== null && !NOT_ON_DECK.has(one.id) && (DECK_FACT_KINDS as readonly string[]).includes(one.reads))
 
 /** How many pictures a deck draws from the fork's picks. */
 export const DECK_PICKS = 2
@@ -226,7 +239,7 @@ export const DECK_PICKS = 2
 export const DECK_CHOICES = 4
 
 /** Every deck technique as the fork reads it: its id, its one job, and the question that says it fits. */
-const PICKS_GUIDE = DECK_TECHNIQUES.map(one => `${one.id} (${one.job.replace(/\.$/, '')}; fits: ${one.fits}${one.reads === 'comparison' ? '' : `; reads ${one.reads}`})`).join('; ')
+const PICKS_GUIDE = DECK_TECHNIQUES.map(one => `${one.id} (${one.job.replace(/\.$/, '')}; fits: ${one.fits}; reads ${one.reads})`).join('; ')
 
 const FACTS_GUIDE =
   'The kinds, each optional: figures [{"label", "value": number, "unit"?}] (2 or 3 values the call turns on; unit ' +
@@ -238,20 +251,20 @@ const FACTS_GUIDE =
   'trust it, how much of it there is); tradeoffs {"pros": [1 to 4 lines], "cons": [1 to 4 lines]} (for and against ' +
   'the recommended option); gotchas [{"text", "level": "risk" | "watch"}] (a catch even on the recommendation); ' +
   'precedent [{"when", "ask", "ruled": "yes" | "no", "came"?}] (the person\'s earlier rulings like this one, only ' +
-  'ones you can point to). Never repeat in facts what cells, sources or touches already say: the deck draws each ' +
+  'ones you can point to). Never repeat in facts what the options, cells or touches already say: the deck draws each ' +
   'once, on one page. At most twelve words to a line, and each thing once.'
 
 export const FORK_PROMPT =
   '[vantage-point] This message is from the vantage-point plugin, not the person. Do not use tools and do not ' +
   'answer your own question. Your last reply asked the person to decide something. Describe that decision as ' +
-  `JSON only, no code fence, in this shape: ${SHAPE}. headline: the question, eight words or fewer, ending in a question mark: the deck heads with it. ask: the ` +
+  `JSON only, no code fence, in this shape: ${SHAPE}. headline: the concrete first step a yes starts, asked as a ` +
+  'question, twelve words or fewer, naming what is done to what (File findings 1-4 as a new issue, then close 121?), ' +
+  'never the options restated or a question about which to pick: the deck heads with it and says it nowhere else. ask: the ' +
   'decision in one sentence. options: the two ' +
   'or three you offered, as short imperative labels. dimensions: two or three questions that tell them apart. ' +
   'One cell for every option and dimension: a value of three words or fewer, tone advantage (good), neutral ' +
-  '(middling) or tradeoff (bad). recommend: one option, exactly as written. why: why it matters, forty words or ' +
-  'fewer. reason: why the recommended option, twenty-five words or fewer. next: the concrete first step a yes ' +
-  'starts, as an instruction of twenty words or fewer that names what is done to what, never the option restated, ' +
-  'with no citation. arguments: the one or two reasons the recommendation rests on, each with the fact behind it ' +
+  '(middling) or tradeoff (bad). recommend: one option, exactly as written. ' +
+  'arguments: the one or two reasons the recommendation rests on, each with the fact behind it ' +
   'as a tool output you saw in this session: claim, the reason in twelve words or fewer; call, a piece of that tool ' +
   'call\'s input as you sent it (a file path, a command, a query), so the call can be found; fact, that output\'s data, ' +
   'copied exactly, in one shape: {"shape": "table", "columns": [2 to 4 names], "rows": [[one cell per column]]} for ' +
@@ -266,16 +279,12 @@ export const FORK_PROMPT =
   'use; name the series and columns in the claim\'s own words. Between them the arguments back every part of the ' +
   'recommended option (to keep a thing and to raise it are two parts), or the option names only what they back. A ' +
   'lines fact keeps the lines that say what its other lines belong to (an id, a name, a heading), and draws no line ' +
-  'its claim does not use. sources: files you read in this ' +
-  'session or memory files in your context, each with its path and lines, the first and last line of the ' +
-  `passage that backs the claim as your reads numbered them ("412-418"), at most ${SOURCE_LINES} lines; never copy the ` +
-  'text, which is read from the file. Cite them in why and reason as [1], [2]. A source whose file you did not ' +
-  'read, or whose lines are not in it, is dropped, and its citations with it. touches: for each option, up to six files or ADR documents it would change or ' +
+  'its claim does not use. touches: for each option, up to six files or ADR documents it would change or ' +
   'that govern it, as paths in the repository; leave out an option that touches none, and a path that does not ' +
   'exist is dropped. picks: first rank the ' + `${DECK_CHOICES}` + ' techniques that would show this decision best, best ' +
   'first, by asking each one\'s question of the decision, the shape the call actually turns on ' +
   '(a flow, a line to clear, a split, a run of steps, a few figures), not the catch or the for and against every ' +
-  `call has; the deck draws the first ${DECK_PICKS} whose facts pass their checks. The techniques: ${PICKS_GUIDE}. A pick that draws the options' comparison needs no fact. facts: the ` +
+  `call has; the deck draws the first ${DECK_PICKS} whose facts pass their checks. The techniques: ${PICKS_GUIDE}. facts: the ` +
   'facts your picks read, and no other kind; write each as what it is, and include only facts the reply or the ' +
   `files you read state. ${FACTS_GUIDE} If there is no real choice, reply {}.`
 
@@ -283,7 +292,7 @@ export const FORK_PROMPT =
 export function forkPrompt(wrap: WrapUpAsk | null): string {
   if (wrap === null) return FORK_PROMPT
   return `${FORK_PROMPT} You asked the question in the end-of-turn box, not in your reply text:\n${wrapUpLines(wrap)}\n` +
-    'Its first button is your recommendation. Your options are its buttons\' labels, copied exactly and in their order: ' +
+    'Your options are its buttons\' labels, copied exactly and in their order: ' +
     'a deck whose options differ from them is dropped.'
 }
 
@@ -319,10 +328,7 @@ export async function fitFields(raw: Record<string, unknown>, compress: Compress
     return cutWords(value, words)
   }
   const out: Record<string, unknown> = { ...raw }
-  out.headline = await fit(raw.headline, 8)
-  out.why = await fit(raw.why, 40)
-  out.reason = await fit(raw.reason, 25)
-  out.next = await fit(raw.next, 20)
+  out.headline = await fit(raw.headline, HEADLINE_WORDS)
   if (Array.isArray(raw.cells)) {
     out.cells = await Promise.all(raw.cells.map(async cell =>
       typeof cell === 'object' && cell !== null ? { ...cell, value: await fit((cell as Record<string, unknown>).value, 3) } : cell))
@@ -346,33 +352,6 @@ export function deckFacts(raw: unknown): Facts | undefined {
 /** A source's path as the link that opens it: relative paths sit in the session's folder `cwd`. */
 export const fileUrl = (cwd: string) => (path: string) => `file://${path.startsWith('/') ? path : `${cwd.replace(/\/$/, '')}/${path}`}`
 
-/**
- * Everything a deck decision's page draws, as the composer's facts (#102): the
- * fork's own and its comparison as the catalog's comparison (each cell's words
- * kept, its tone the value that ranks it), so one page composes them and no tab
- * holds any apart (the owner, 2026-10-24). Its sources are chips on their
- * sentences, never a tile (#108).
- */
-export function deckPageFacts(d: Decision): Facts | undefined {
-  const out: Facts = { ...(deckFacts(d.facts) ?? {}) }
-  // The options' comparison draws only when the fork picked a technique that draws it (#109); a deck from before picks keeps it.
-  if (d.dimensions.length > 0 && (d.picks === undefined || d.picks.some(id => COMPARISON_VIEWS.has(id)))) {
-    out.comparison = {
-      options: [...d.options],
-      recommended: d.recommend,
-      rows: d.dimensions.map((label, r) => ({
-        label,
-        unit: '',
-        better: 'higher' as const,
-        values: d.cells[r]!.map(cell => TONE_SCORE[cell.tone]),
-        cells: d.cells[r]!.map(cell => cell.value),
-      })),
-    }
-  }
-  return Object.keys(out).length === 0 ? undefined : out
-}
-
-/** The fork's JSON as a decision, or null when its structure is broken. Facts that fail are left out. */
 /** The fork's picks that name a deck technique, in its order, at most `DECK_CHOICES`; empty when it named none. */
 export function picksOf(raw: unknown): string[] {
   if (!Array.isArray(raw)) return []
@@ -435,86 +414,6 @@ export async function checkTouches(decision: Decision, read: ReadFile): Promise<
   }))
   const out: Decision = { ...decision, touches }
   if (touches.every(paths => paths.length === 0)) delete out.touches
-  return out
-}
-
-/** A path inside Claude Code's auto-memory folder. */
-export const isMemoryPath = (path: string) => /\/\.claude\/projects\/[^/]+\/memory\//.test(path)
-
-/**
- * Sentences of a text; each keeps its own `[n]` citations.
- * A break is `.!?` followed by a space.
- */
-const sentences = (text: string) => text.split(/(?<=[.!?])\s+/).filter(s => s.trim() !== '')
-const citesOf = (sentence: string) => [...sentence.matchAll(/\[(\d+)\]/g)].map(m => Number(m[1]))
-
-/** Every sentence stays; a citation of a dropped source goes (#108). */
-function keepCitations(text: string | undefined, renumber: Map<number, number>): string | undefined {
-  if (text === undefined) return undefined
-  return sentences(text).map(sentence =>
-    sentence.replace(/\s*\[(\d+)\]/g, (_, n: string) => (renumber.has(Number(n)) ? ` [${renumber.get(Number(n))}]` : '')),
-  ).join(' ')
-}
-
-/** A deck paragraph's sentences as the page draws them: each one's text with no markers, and the sources it cites (#108). */
-export function citedSentences(text: string): { text: string; cites: number[] }[] {
-  const out: { text: string; cites: number[] }[] = []
-  for (const sentence of sentences(text)) {
-    const cites = [...new Set(citesOf(sentence))]
-    const bare = sentence.replace(/\s*\[\d+\]/g, '').trim()
-    // A citation set after the full stop is its sentence's, not a sentence of its own.
-    if (bare === '' && out.length > 0) out[out.length - 1]!.cites.push(...cites.filter(n => !out[out.length - 1]!.cites.includes(n)))
-    else if (bare !== '') out.push({ text: bare, cites })
-  }
-  return out
-}
-
-/** A source's chip: its file's name, or a memory's own name, and its first line (#108). */
-export function sourceName(source: Source): string {
-  const name = source.path.split('/').pop() ?? source.path
-  const file = source.memory === true ? `memory: ${name.replace(/\.md$/, '')}` : name
-  return source.line === undefined ? file : `${file}:${source.line}`
-}
-
-/** Whether a tool call in the session named `path`, absolute or as `relative` to the session's folder: a file the agent read. */
-export function wasRead(calls: readonly unknown[], path: string, relative: string): boolean {
-  return calls.some(call => {
-    const text = JSON.stringify(call) ?? ''
-    return text.includes(path) || (relative !== '' && text.includes(relative))
-  })
-}
-
-/**
- * The lines check, no model (#108): a source is a file the agent read this session (or a memory its context
- * carries) and a range of lines in it, and its quote is those lines as the file holds them now, never text the
- * fork retyped. A source that fails loses its citations; every sentence stays.
- */
-export async function checkLines(decision: Decision, read: ReadFile, isRead: (path: string) => boolean, memoriesInContext: ReadonlySet<string>): Promise<Decision> {
-  const sources = decision.sources ?? []
-  const renumber = new Map<number, number>()
-  const kept: Source[] = []
-  for (const [i, source] of sources.entries()) {
-    const memory = isMemoryPath(source.path)
-    if (memory ? !memoriesInContext.has(source.path) : !isRead(source.path)) continue
-    const line = source.line ?? 0
-    const lines = await read(source.path).then(text => text.split('\n'), () => null)
-    if (lines === null || line < 1 || line > lines.length) continue
-    const end = Math.min(source.end ?? line, line + SOURCE_LINES - 1, lines.length)
-    // The passage loses the indent its lines share, so code reads from its own left edge.
-    const passage = lines.slice(line - 1, Math.max(end, line))
-    const indent = Math.min(...passage.filter(text => text.trim() !== '').map(text => /^\s*/.exec(text)![0].length))
-    const quote = passage.map(text => text.slice(Number.isFinite(indent) ? indent : 0)).join('\n').replace(/\s+$/, '')
-    if (quote.trim() === '') continue
-    kept.push({ ...source, quote, line, end: Math.max(end, line), ...(memory ? { memory: true } : {}) })
-    renumber.set(i + 1, kept.length)
-  }
-  const out: Decision = { ...decision, sources: kept }
-  for (const key of ['why', 'reason'] as const) {
-    const text = keepCitations(decision[key], renumber)
-    if (text === undefined) delete out[key]
-    else out[key] = text
-  }
-  if (kept.length === 0) delete out.sources
   return out
 }
 

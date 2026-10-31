@@ -358,6 +358,42 @@ export function overBudget(facts: Facts, proseWords: number): string[] {
   return out
 }
 
+/** A picture whose words the full text mostly never says would contradict it: below this share of its words found there, it is refused. */
+export const SAID_SHARE = 0.25
+/** Kinds exempt from it: `answers` is never drawn, and `terms` gives meanings the text leaves out on purpose. */
+const SAYS_MORE = new Set(['answers', 'terms', 'sources'])
+const COMMON = new Set(['about', 'after', 'also', 'before', 'from', 'have', 'into', 'just', 'more', 'most', 'only', 'over', 'same', 'some', 'than', 'that', 'their', 'them', 'then', 'there', 'these', 'they', 'this', 'what', 'when', 'where', 'which', 'while', 'will', 'with', 'would', 'your'])
+
+/** The content words of a text, each keyed by a stem so "reviewed" meets "reviewing" and "added" meets "adds". */
+function stems(text: string): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const word of text.toLowerCase().match(/[a-z]+/g) ?? [])
+    if (word.length >= 4 && !COMMON.has(word)) {
+      const stem = word.replace(/(?<=\w{3})(ing|ed|es|s)$/, '').slice(0, 5)
+      if (!out.has(stem)) out.set(stem, word)
+    }
+  return out
+}
+
+/**
+ * The picture kinds whose words the item's full text mostly does not say (the
+ * owner, 2026-10-29: the card drew a catch and a count the text never
+ * mentioned, and missed the workflow it narrated). Each is the kind and the
+ * words the text lacks. A kind with fewer than three content words passes.
+ */
+export function unsaid(facts: Facts, prose: string): { kind: string; missing: string[] }[] {
+  const inProse = stems(prose)
+  return Object.entries(facts).flatMap(([kind, value]) => {
+    if (SAYS_MORE.has(kind)) return []
+    const lines: { at: string; text: string }[] = []
+    said(value, kind, lines)
+    const words = stems(lines.map(one => one.text).join(' '))
+    if (words.size < 3) return []
+    const missing = [...words].filter(([stem]) => !inProse.has(stem)).map(([, word]) => word)
+    return 1 - missing.length / words.size < SAID_SHARE ? [{ kind, missing }] : []
+  })
+}
+
 /** Why a view the facts could feed is not offered: its fact is missing, or a meaning check failed. */
 export type Refusal = { view: string; reason: string }
 
