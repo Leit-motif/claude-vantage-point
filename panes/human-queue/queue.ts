@@ -15,7 +15,17 @@ import type { HumanQueueIssue, HumanQueueIssueMeta } from '../../types'
 import { overBudget, parseFacts, unsaid, type Facts, type SchemaError } from '../visuals/facts.ts'
 import { picturesOf, withoutPictures } from './pictures.ts'
 
-export type Verdict = 'yes' | 'no'
+/**
+ * What an item asks (#125): a `decision` is a yes or no on the agent's
+ * recommendation; a `pair` is a blind choice between two outputs, A, B or Same,
+ * declared by a `pair` fact.
+ */
+export type ItemKind = 'decision' | 'pair'
+
+export type Verdict = 'yes' | 'no' | 'a' | 'b' | 'same'
+
+/** The verdicts each kind of item takes, in the order the card draws them. */
+export const VERDICTS: Readonly<Record<ItemKind, readonly Verdict[]>> = { decision: ['no', 'yes'], pair: ['a', 'same', 'b'] }
 
 export type Ruling = { verdict: Verdict | null; comment: string | null }
 
@@ -37,6 +47,7 @@ export type Item = {
   body: string
   /** The item's typed facts, or null when it carries none. */
   facts: ItemFacts | null
+  kind: ItemKind
   verdict: Verdict | null
   comment: string | null
   /** 0-based line of the `###` heading. */
@@ -71,7 +82,8 @@ export type Request = {
 
 export type Queue = { requests: Request[] }
 
-export type Counts = { yes: number; no: number; unruled: number; total: number }
+/** `a`, `b` and `same` are there only when the request holds a pair item. */
+export type Counts = { yes: number; no: number; a?: number; b?: number; same?: number; unruled: number; total: number }
 
 const FIELD = /^(status|opened|completed|note):[ \t]*(.*)$/i
 const REQUEST = /^##(?!#)[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/
@@ -80,7 +92,11 @@ const RULING = /^ruling:[ \t]*(.*)$/i
 const FENCE = /^[ \t]{0,3}(`{3,}|~{3,})(.*)$/
 const FACTS_FENCE = /^vantage-facts(?:[ \t]|$)/
 const DONE = /^(done|closed|resolved|complete|completed)\b/i
-const VERDICT = /^(yes|no|y|n)(?=$|[ \t]|—|–|--|[-,:;.!][ \t]|[,:;.!]$)/i
+const AFTER_VERDICT = /(?=$|[ \t]|—|–|--|[-,:;.!][ \t]|[,:;.!]$)/.source
+const VERDICT: Readonly<Record<ItemKind, RegExp>> = {
+  decision: new RegExp(`^(yes|no|y|n)${AFTER_VERDICT}`, 'i'),
+  pair: new RegExp(`^(a|b|same)${AFTER_VERDICT}`, 'i'),
+}
 const SEPARATOR = /^[ \t]*(?:—|–|--|-|[,:;.!])?[ \t]*/
 
 export const FILE = 'human-queue.md'
@@ -203,14 +219,25 @@ function trimBlock(block: string[]): string {
   return block.slice(start, end).join('\n')
 }
 
-/** `yes`, `no — too smug`, `— undecided but noted`; null when the text is no ruling. */
-export function readRuling(value: string): Ruling | null {
+/** The kind an item's facts declare: a pair when they carry a `pair` fact. */
+export function kindOf(facts: ItemFacts | null): ItemKind {
+  return facts?.facts.pair === undefined ? 'decision' : 'pair'
+}
+
+/**
+ * `yes`, `no — too smug`, `— undecided but noted`, and for a pair `a`, `b`,
+ * `same — both fine`; null when the text is no ruling. With no `kind`, either
+ * kind's verdict reads.
+ */
+export function readRuling(value: string, kind?: ItemKind): Ruling | null {
   const text = value.trim()
   if (text === '') return { verdict: null, comment: null }
-  const word = VERDICT.exec(text)?.[1]?.toLowerCase()
-  if (word !== undefined) {
+  for (const one of kind === undefined ? (['decision', 'pair'] as const) : [kind]) {
+    const word = VERDICT[one].exec(text)?.[1]?.toLowerCase()
+    if (word === undefined) continue
     const rest = text.slice(word.length).replace(SEPARATOR, '').trim()
-    return { verdict: word.startsWith('y') ? 'yes' : 'no', comment: rest === '' ? null : rest }
+    const verdict: Verdict = one === 'pair' ? (word as Verdict) : word.startsWith('y') ? 'yes' : 'no'
+    return { verdict, comment: rest === '' ? null : rest }
   }
   const dashed = /^(?:—|–|--|-)[ \t]*(.*)$/.exec(text)
   if (dashed !== null) {
@@ -221,9 +248,9 @@ export function readRuling(value: string): Ruling | null {
 }
 
 /** Like readRuling, keeping a free-text value as the comment. */
-export function parseRuling(value: string): Ruling {
+export function parseRuling(value: string, kind?: ItemKind): Ruling {
   const text = value.trim()
-  return readRuling(text) ?? { verdict: null, comment: text }
+  return readRuling(text, kind) ?? { verdict: null, comment: text }
 }
 
 export function formatRuling(ruling: Ruling): string {
@@ -286,14 +313,18 @@ export function parse(text: string): Queue {
       let last = itemEnd - 1
       while (last > itemLine && (all[last] as string).trim() === '') last--
       const lastRuling = !inside[last] && last > itemLine ? RULING.exec(all[last] as string) : null
-      const ruling = lastRuling === null ? null : readRuling(lastRuling[1] as string)
+      // The facts say the item's kind, and the kind which words are a verdict.
+      const whole = takeFacts(all.slice(itemLine + 1, itemEnd))
+      const kind = kindOf(whole.facts)
+      const ruling = lastRuling === null ? null : readRuling(lastRuling[1] as string, kind)
       const rulingLine = ruling === null ? null : last
-      const kept = takeFacts(all.slice(itemLine + 1, rulingLine ?? itemEnd))
+      const kept = rulingLine === null ? whole : takeFacts(all.slice(itemLine + 1, rulingLine))
       return {
         index: k + 1,
         heading: (ITEM.exec(all[itemLine] as string)?.[1] ?? '').trim(),
         body: trimBlock(kept.rest),
         facts: kept.facts,
+        kind,
         verdict: ruling?.verdict ?? null,
         comment: ruling?.comment ?? null,
         line: itemLine,
@@ -338,15 +369,21 @@ export function findItem(request: Request, index: number, heading?: string | nul
   return byHeading.length === 1 ? byHeading[0] : undefined
 }
 
-export function counts(request: Request): Counts {
-  let yes = 0
-  let no = 0
-  for (const item of request.items) {
-    if (item.verdict === 'yes') yes++
-    else if (item.verdict === 'no') no++
-  }
+export function counts(request: Pick<Request, 'items'>): Counts {
+  const tally: Record<Verdict, number> = { yes: 0, no: 0, a: 0, b: 0, same: 0 }
+  for (const item of request.items) if (item.verdict !== null) tally[item.verdict]++
   const total = request.items.length
-  return { yes, no, unruled: total - yes - no, total }
+  const ruled = tally.yes + tally.no + tally.a + tally.b + tally.same
+  const pairs = request.items.some(item => item.kind === 'pair') ? { a: tally.a, b: tally.b, same: tally.same } : {}
+  return { yes: tally.yes, no: tally.no, ...pairs, unruled: total - ruled, total }
+}
+
+/** The tally as words, `3 yes, 1 no, 2 unruled`, each kind's verdicts where the request holds that kind. */
+export function tallyText(request: Pick<Request, 'items'>): string {
+  const c = counts(request)
+  const decisions = request.items.some(item => item.kind === 'decision') || c.a === undefined ? [`${c.yes} yes`, `${c.no} no`] : []
+  const pairs = c.a === undefined ? [] : [`${c.a} a`, `${c.b} b`, `${c.same} same`]
+  return [...decisions, ...pairs, `${c.unruled} unruled`].join(', ')
 }
 
 export class QueueError extends Error {}
@@ -515,7 +552,8 @@ export type Payload = {
   /** Present for an issue: which submission this is, and in a hand-back how far it got. */
   submission?: SubmissionRef | Delivery
   counts: Counts
-  items: { index: number; heading: string; verdict: Verdict | null; comment: string | null }[]
+  /** A pair item says so, with its key when it has one; a decision carries neither. */
+  items: { index: number; heading: string; kind?: 'pair'; key?: { a: string; b: string }; verdict: Verdict | null; comment: string | null }[]
 }
 
 /** What the requesting agent receives on submit: the rulings, not the items' text. */
@@ -537,6 +575,8 @@ export function payload(request: Request, file: string = FILE, submission?: Subm
     items: request.items.map(item => ({
       index: item.index,
       heading: item.heading,
+      ...(item.kind === 'pair' ? { kind: 'pair' as const } : {}),
+      ...(item.facts?.facts.pair?.key === undefined ? {} : { key: item.facts.facts.pair.key }),
       verdict: item.verdict,
       comment: item.comment,
     })),
@@ -550,8 +590,7 @@ export function payload(request: Request, file: string = FILE, submission?: Subm
  * still on when it is.
  */
 export function submissionText(request: Request, file: string = FILE, delivery?: Delivery, labelNote?: string | null): string {
-  const c = counts(request)
-  const tally = request.items.length > 0 ? ` — ${c.yes} yes, ${c.no} no, ${c.unruled} unruled` : ''
+  const tally = request.items.length > 0 ? ` — ${tallyText(request)}` : ''
   const note = request.note === null ? '' : ` Note: ${request.note}`
   const label = delivery?.labelRemoved
     ? 'and ready-for-human is off'
@@ -823,13 +862,12 @@ function cell(text: string): string {
  * (`file` is the issue's URL).
  */
 export function rulingsComment(request: Request, file: string, submission: SubmissionRef): string {
-  const c = counts(request)
   const on = request.completed === null ? '' : ` on ${request.completed}`
   const lines = [RULINGS_HEADING, '', ...submissionMarkers(submission), '']
   if (request.items.length === 0) {
     lines.push(`Marked done in the human queue${on}.`)
   } else {
-    lines.push(`Ruled in the human queue${on}: ${c.yes} yes, ${c.no} no, ${c.unruled} unruled.`, '')
+    lines.push(`Ruled in the human queue${on}: ${tallyText(request)}.`, '')
     lines.push('| Item | Ruling | Comment |', '| --- | --- | --- |')
     for (const item of request.items) {
       lines.push(`| ${cell(item.heading)} | ${item.verdict ?? '—'} | ${cell(item.comment ?? '')} |`)
@@ -907,17 +945,21 @@ export const CARD_PICTURES = 2
  * never draws; at least one picture, a fact kind or an embedded image, and at
  * most two; no so-what or why line, which the card no longer draws; a question
  * written as the recommendation, so Yes takes it; facts within the word
- * budget; and no picture of what the full text never says. A plain ask has no items, so nothing here.
+ * budget; and no picture of what the full text never says. A pair item (#125)
+ * carries `pair` in place of `answers`: its order is blind, so it recommends
+ * nothing, and its answers are always A, Same and B. A plain ask has no items, so nothing here.
  */
 export function uncomposedItems(request: Pick<Request, 'items'>): Uncomposed[] {
   return request.items.flatMap(item => {
     const facts = item.facts?.facts
     if (facts === undefined) return [{ heading: item.heading, missing: ['facts'], over: [] }]
-    const kinds = Object.keys(facts).filter(kind => kind !== 'answers')
+    const kinds = Object.keys(facts).filter(kind => kind !== 'answers' && kind !== 'pair')
     const images = picturesOf(item.body).length
     const pictures = kinds.length + images
-    const missing = [...(facts.answers === undefined ? ['answers'] : []), ...(pictures === 0 ? ['a picture'] : [])]
+    const isPair = item.kind === 'pair'
+    const missing = [...(facts.answers === undefined && !isPair ? ['answers'] : []), ...(pictures === 0 ? ['a picture'] : [])]
     const over = [
+      ...(isPair && facts.answers !== undefined ? ['a pair item takes no answers fact: its answers are A, Same and B, and a blind order recommends neither'] : []),
       ...(pictures > CARD_PICTURES ? [`${pictures} pictures (${[...kinds, ...(images === 0 ? [] : [`${images} image${images === 1 ? '' : 's'}`])].join(', ')}) for a card that draws ${CARD_PICTURES}: keep the ones the ruling turns on`] : []),
       ...(facts.answers?.soWhat === undefined ? [] : ['answers.soWhat is no longer drawn: say the decision in the question']),
       ...(facts.answers?.why === undefined ? [] : ['answers.why is no longer drawn: let a picture carry why, or leave it to the full text']),
@@ -939,7 +981,7 @@ export function uncomposedText(items: Uncomposed[]): string {
       ? 'no vantage-facts block'
       : [...(one.missing.length === 0 ? [] : [`missing ${one.missing.join(', ')}`]), ...one.over].join('; ')
   return [
-    `Not opened: an item reaches the person as its question and at most ${CARD_PICTURES} pictures, nothing else (the owner, 2026-10-26; the vantage-point:ask skill, step 4). Write the question as your recommendation, so Yes takes it. Give each item a vantage-facts block with an answers fact, which the card does not draw, and the one or two facts or embedded images the ruling turns on, as pictures: numbers, flows, steps, counts, splits and comparisons. Everything else stays in the item's full text, one press away.`,
+    `Not opened: an item reaches the person as its question and at most ${CARD_PICTURES} pictures, nothing else (the owner, 2026-10-26; the vantage-point:ask skill, step 4). Write the question as your recommendation, so Yes takes it. Give each item a vantage-facts block with an answers fact, which the card does not draw, and the one or two facts or embedded images the ruling turns on, as pictures: numbers, flows, steps, counts, splits and comparisons. A pair item, a blind choice between A and B, carries a pair fact in place of answers. Everything else stays in the item's full text, one press away.`,
     ...items.map(one => `- ${one.heading}: ${why(one)}. Fix it from what the work has, then call the review tool again.`),
   ].join('\n')
 }

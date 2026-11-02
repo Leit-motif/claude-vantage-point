@@ -3,9 +3,10 @@
 // The desktop, the phone and VS Code draw it as an image, so it carries no
 // presses: the slim row of keyed Buttons under it does the work.
 
+import type { Verdict } from '../panes/human-queue/queue.ts'
 import { esc } from '../panes/svg.ts'
 
-export type ScreenItem = { index: number; heading: string; text: string; verdict: 'yes' | 'no' | null; comment: string | null }
+export type ScreenItem = { index: number; heading: string; text: string; verdict: Verdict | null; comment: string | null }
 export type ScreenRequest = { title: string; where: string; setup: string; note: string | null; items: ScreenItem[] }
 export type ScreenBucket = { name: string; asks: number; next: string; done: boolean[] }
 
@@ -128,9 +129,11 @@ function ask(s: AskScreen, h: number): string {
   const slides = Math.max(1, r.items.length)
   const item = r.items.length === 0 ? null : (r.items[s.slide - 1] ?? null)
   const here = r.items.length === 0 ? 0 : s.slide - 1
-  const yes = r.items.filter(i => i.verdict === 'yes').length
+  // A pair's A, B and Same count with the yeses: answered, and none of them a no (#125).
   const no = r.items.filter(i => i.verdict === 'no').length
+  const yes = r.items.filter(i => i.verdict !== null && i.verdict !== 'no').length
   const left = r.items.length - yes - no
+  const tone = (v: Verdict | null | undefined, none: string) => (v === 'no' ? C.no : v == null ? none : C.yes)
 
   let bar = text(10, 22, wrap(s.bucket, 260, 12, 1)[0] ?? '', 12, C.dim)
   bar += text(W - 10, 22, `${s.position} of ${s.of}`, 12, C.dim, 'text-anchor="end"')
@@ -141,7 +144,7 @@ function ask(s: AskScreen, h: number): string {
     const it = r.items[i] ?? null
     // Where you are is a solid fill in the text's own near-white, no outline; ruled
     // items keep their green or red, and the card's pill says the current verdict.
-    const fill = i === here ? C.ink : it?.verdict === 'yes' ? C.yes : it?.verdict === 'no' ? C.no : C.track
+    const fill = i === here ? C.ink : tone(it?.verdict, C.track)
     body += rect(12 + i * (segW + 2), 45, segW, 4, 2, fill)
   }
   let ty = 66
@@ -160,11 +163,11 @@ function ask(s: AskScreen, h: number): string {
   // The card is as tall as what it holds: the request's lead-in, dim, then the
   // item, then its comment. Every item draws the same parts in the same order.
   const cardTop = ty + 10
-  const accent = item?.verdict === 'yes' ? C.yes : item?.verdict === 'no' ? C.no : C.line
+  const accent = tone(item?.verdict, C.line)
   const label = item ? `#${item.index} of ${r.items.length} · ${item.heading}` : 'Plain ask'
-  const pill = item ? (item.verdict === 'yes' ? 'Yes' : item.verdict === 'no' ? 'No' : 'Not ruled') : 'To do'
+  const pill = item ? (item.verdict === null ? 'Not ruled' : ({ yes: 'Yes', no: 'No', a: 'A', b: 'B', same: 'Same' } as const)[item.verdict]) : 'To do'
   let inner = text(23, cardTop + 20, wrap(label, 260, 10.5, 1)[0] ?? '', 10.5, C.dim, `font-family="${MONO}"`)
-  inner += text(W - 23, cardTop + 20, pill, 11.5, item?.verdict === 'yes' ? C.yes : item?.verdict === 'no' ? C.no : C.dim, 'text-anchor="end"')
+  inner += text(W - 23, cardTop + 20, pill, 11.5, tone(item?.verdict, C.dim), 'text-anchor="end"')
   let cy = cardTop + 44
   if (item && r.setup !== '') {
     for (const line of wrap(r.setup, W - 46, 12.5, 6)) {

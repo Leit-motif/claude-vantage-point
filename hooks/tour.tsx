@@ -61,7 +61,7 @@ export const TOUR_STOPS: readonly TourStop[] = [
   {
     key: 'queue',
     name: 'Human queue',
-    does: 'Asks your agents leave for you, ruled yes or no with W and S, a comment with Tab, sent with R.',
+    does: 'Asks your agents leave for you, ruled with Yes or No, a comment under Comment, sent with ⏎.',
     look: 'The you row counts asks; press it for the queue.',
     act: 'send',
     prompt:

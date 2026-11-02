@@ -82,27 +82,7 @@ export function parseDecision(input: unknown): Decision | null {
   }
   const recommend = options.indexOf(line(record.recommend) ?? '')
   if (seen.size !== options.length * dimensions.length || recommend < 0) return null
-  const decision: Decision = { headline, ask, options, dimensions, cells, recommend }
-  const touches = touchesOf(record.touches, options)
-  return { ...decision, ...(touches === null ? {} : { touches }) }
-}
-
-/**
- * The paths each option touches, by option index. Unlike the deck's other fields, a malformed
- * entry is dropped rather than refusing the decision: the snapshot is context, never worth the deck.
- */
-function touchesOf(value: unknown, options: readonly string[]): Decision['touches'] | null {
-  if (!Array.isArray(value)) return null
-  const touches: string[][] = options.map(() => [])
-  for (const raw of value) {
-    const entry = object(raw)
-    const option = options.indexOf(line(entry?.option) ?? '')
-    if (option < 0 || !Array.isArray(entry?.paths)) continue
-    for (const path of entry.paths.map(line)) {
-      if (path !== null && !touches[option]!.includes(path) && touches[option]!.length < 6) touches[option]!.push(path)
-    }
-  }
-  return touches.some(paths => paths.length > 0) ? touches.map(paths => paths.map(path => ({ path }))) : null
+  return { headline, ask, options, dimensions, cells, recommend }
 }
 
 /**

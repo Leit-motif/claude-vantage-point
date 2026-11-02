@@ -5,7 +5,7 @@
 import type { SessionMessage } from 'claude-code'
 import type { HumanQueueDecision } from '../types'
 
-import { composed, FACT_KINDS, parseFacts, type Facts } from '../panes/visuals/facts'
+import { pagesOf } from '../panes/visuals/options'
 import { HEADLINE_WORDS, parseDecision } from './reply'
 
 export type Decision = HumanQueueDecision
@@ -17,12 +17,27 @@ export const GATE_MODEL = 'haiku'
 export const withoutGist = (answer: string) => answer.replace(/<gist>[\s\S]*?<\/gist>\s*$/, '')
 
 /**
- * Cheap, no model: does the end of the reply ask the person something? A question
- * mark in the last paragraph, or two or more listed options beside a choosing word
- * or a question (issue #23: the question often sits just above the list).
+ * A question the reply asks the person to choose on, anywhere in its prose (#133): one that
+ * puts alternatives ("or") or a choosing word to the reader. Code, and a question the reply
+ * answers in its next breath, ask nothing.
+ */
+function asksToChoose(prose: string): boolean {
+  const plain = prose.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ')
+  return plain.split(/(?<=[.!?])\s+/).some(sentence =>
+    sentence.trim().endsWith('?') &&
+    (/\b(which|should I|shall I|do you want|would you like|prefer|choose|pick|your call)\b/i.test(sentence) ||
+      /\b(you|I|we)\b[^?]*\bor\b/i.test(sentence)))
+}
+
+/**
+ * Cheap, no model: does the reply ask the person something? A question mark in the
+ * last paragraph, a choosing question anywhere in the prose (#133: it is often buried
+ * mid-reply), or two or more listed options beside a choosing word or a question
+ * (issue #23: the question often sits just above the list).
  * A markdown table's body rows are options too; its header and rule are not.
  */
 export function looksLikeDecision(answer: string): boolean {
+  if (asksToChoose(withoutGist(answer))) return true
   const tail = withoutGist(answer).trim().slice(-1500)
   const paragraphs = tail.split(/\n\s*\n/)
   const last = paragraphs[paragraphs.length - 1] ?? ''
@@ -191,16 +206,18 @@ export function asButtons<D extends { options: readonly string[] }>(decision: D,
   return { ...decision, options: options as string[] }
 }
 
-/** What the gate reads: the reply's end, and the wrap-up box's question after it. */
+/** What the gate reads: the whole reply, and the wrap-up box's question after it. */
 export function gateText(answer: string, wrap: WrapUpAsk | null): string {
-  const tail = answer.trim().slice(-2000)
-  return wrap === null ? tail : `${tail}\n\nThe reply ended with this question in its end-of-turn box:\n${wrapUpLines(wrap)}`
+  // The whole reply: its one question is often buried mid-reply (#133). The cap only bounds a runaway reply.
+  const text = answer.trim().slice(-40_000)
+  return wrap === null ? text : `${text}\n\nThe reply ended with this question in its end-of-turn box:\n${wrapUpLines(wrap)}`
 }
 
 export const GATE_SYSTEM =
-  'You read the end of an AI coding assistant reply. Answer YES if it ends by asking the person to decide, ' +
-  'choose, or approve something before work can go on. Answer NO for rhetorical questions, pleasantries such ' +
-  'as "anything else?", or a reply that just reports. Reply with YES or NO only.'
+  'You read an AI coding assistant reply. Answer YES if anywhere in it, at the end or buried in the middle, ' +
+  'it asks the person to decide, choose, or approve something before work can go on. Answer NO for rhetorical ' +
+  'questions it answers itself, pleasantries such as "anything else?", or a reply that just reports. ' +
+  'Reply with YES or NO only.'
 
 /** The gate's verdict from Haiku's text. */
 export const isYes = (text: string) => /^\s*yes\b/i.test(text)
@@ -209,84 +226,57 @@ const SHAPE =
   '{"headline": string, "ask": string, "options": [string], ' +
   '"dimensions": [string], "cells": [{"option": string, "dimension": string, "value": string, ' +
   '"tone": "advantage" | "neutral" | "tradeoff"}], "recommend": string, ' +
-  '"touches": [{"option": string, "paths": [string]}], ' +
-  '"arguments": [{"claim": string, "call": string, "fact": fact}], "picks": [string], "facts": {kind: fact}}'
+  '"pages": [{"option": string, "what": string, "diagrams": [diagram]}]}'
 
-/**
- * The fact kinds a deck draws on its Decision tab, as the fork writes them: a
- * queue item's kinds less `answers` and `impact`, which are a yes and a no
- * (the deck has its own options), and less what another tab already holds, so
- * nothing is said twice (the owner, 2026-10-24): a comparison is the Comparison
- * tab's grid, sources are the Sources tab, and what each option touches is the
- * snapshot's.
- */
-export const DECK_FACT_KINDS = FACT_KINDS.filter(kind => !['answers', 'impact', 'comparison', 'sources', 'touches'].includes(kind))
-
-/** Techniques the deck never draws: a what-if needs the queue's answers, and a glossary is the deck's own text. */
-export const NOT_ON_DECK = new Set(['what-if', 'glossary'])
-
-/**
- * The catalog's techniques a deck can draw: each reads a fact the fork writes. None draws the options' own
- * comparison, which restated the yes and the no beside the options (the owner's ruling on #123).
- */
-export const DECK_TECHNIQUES = composed().filter(one =>
-  one.reads !== null && !NOT_ON_DECK.has(one.id) && (DECK_FACT_KINDS as readonly string[]).includes(one.reads))
-
-/** How many pictures a deck draws from the fork's picks. */
-export const DECK_PICKS = 2
-
-/** How many techniques the fork ranks, so a pick whose facts fail its checks passes its slot down (#109). */
-export const DECK_CHOICES = 4
-
-/** Every deck technique as the fork reads it: its id, its one job, and the question that says it fits. */
-const PICKS_GUIDE = DECK_TECHNIQUES.map(one => `${one.id} (${one.job.replace(/\.$/, '')}; fits: ${one.fits}; reads ${one.reads})`).join('; ')
-
-const FACTS_GUIDE =
-  'The kinds, each optional: figures [{"label", "value": number, "unit"?}] (2 or 3 values the call turns on; unit ' +
-  '"$", "%" or a noun); threshold {"values": [1 to 4 {"label", "value"}], "line": {"label", "value"}}; parts ' +
-  '{"total", "label"?, "parts": [2 to 5 {"label", "value"}]}; flow {"nodes": [2 to 5 names], "moves": [{"from", ' +
-  '"to", "label"?}], "never"?: {"from", "to"}}; steps [{"when", "what"}] (3 to 5, in order); counts {"total", ' +
-  '"now", "after"?, "target"?, "noun"}; terms [{"term", "meaning"}]; evidence [up to 5 {"label", "says", "trust": ' +
-  '"checked" | "measured" | "reported" | "guess", "weight"?: number, "unit"?}] (what the call rests on, how far to ' +
-  'trust it, how much of it there is); tradeoffs {"pros": [1 to 4 lines], "cons": [1 to 4 lines]} (for and against ' +
-  'the recommended option); gotchas [{"text", "level": "risk" | "watch"}] (a catch even on the recommendation); ' +
-  'precedent [{"when", "ask", "ruled": "yes" | "no", "came"?}] (the person\'s earlier rulings like this one, only ' +
-  'ones you can point to). Never repeat in facts what the options, cells or touches already say: the deck draws each ' +
-  'once, on one page. At most twelve words to a line, and each thing once.'
+/** The diagrams a page draws, as the fork reads them (#134): each point, what its title says, and the shapes that draw it. */
+const DIAGRAMS_GUIDE =
+  'A diagram is {"point", "title", "draw", "says"?, "terms"?}. point: "why" (on the recommended option, what makes ' +
+  'it worth doing; on another, why you would pick it), "how" (how it works), "work" (who does the work: the time ' +
+  'it takes you and what falls to the person), "control" (on the recommended option, what you control), "passed" ' +
+  '(on another option, why you did not recommend it) or "risk" (what could go wrong, with its fallback). Each page ' +
+  'has a why, a how, a work, a control or a passed, and a risk, in that order: every option has something that ' +
+  'could go wrong, and its page says what and the fallback. title: the point ' +
+  'the diagram makes, led by its kind, the point always said ("Why: today\'s footage stutters", "How: both routes ' +
+  'use the same macOS recorder", "Who does the work: nearly all mine", "What I control: every press, to the frame", ' +
+  '"Why I didn\'t recommend it: the setup falls to you", "What could go wrong: an off-screen window may not ' +
+  'draw"), twelve words or fewer, and the picture shows that point, not another. draw, one shape: {"shape": "bars", "rows": [2 to 4 {"label", "value": ' +
+  'number, "unit"?, "lit"?: true}]} for amounts to compare, every row the point is about lit, this option\'s own row among them, and the rest not, each label saying in plain ' +
+  'words what its amount is, and never for a count of 0 or 1 (a yes or no difference is a route box or a line); ' +
+  '{"shape": "route", "stages": [2 to 5 stages, each [1 to 3 {"name", "note"?, "lit"?: true}]]} for how something ' +
+  'flows or the steps it takes, left to right, alternatives in one stage stacked, lit only where this option\'s path differs from another (a route all ' +
+  'its own lights nothing), a ' +
+  'note explaining a term in its box; {"shape": "work", "rows": [{"who": "me", "minutes": number, "plus"?}, {"who": ' +
+  '"you", "minutes": number, "plus"?}]} for who does the work: your best estimate of each side\'s minutes, never 0 ' +
+  'for a side that has anything to do, plus for what minutes miss ("+ install"); {"shape": "risk", "risks": [1 or 2 ' +
+  '{"risk", "why"?, "fallback"}]} for what could go wrong and what you would do then; {"shape": "lines", "lines": [2 ' +
+  'to 4 {"text"}]} only for what you control, short statements. Every other point is a picture, not lines: a reason ' +
+  'that is a run of steps is a route, one box a step; a reason that is amounts is bars. Leave out a work diagram ' +
+  'where neither side does anything. says: one sentence under the picture with what it shows, only when the ' +
+  'picture alone does not say it. terms: [{"term", "meaning"}] for every word in the diagram a newcomer would stop ' +
+  'on that no note explains, on every page that uses it, since the person may open any tab first. A diagram carries an argument: never a number without what it means or its unit, ' +
+  'never a figure on its own, and each fact once on a page: no diagram restates the sentence on what the option ' +
+  'is or another diagram, a work row\'s plus never repeats a step a route draws, and a measured value is said once, ' +
+  'as measured, never again in words or rounded. One thing has one estimate on every page (a reshoot\'s minutes are ' +
+  'the same wherever it appears), and one name on every page (not "frame rate" on one tab and "pictures a second" on another). ' +
+  'Bars that argue against a yardstick draw the yardstick as a row (what smooth video does beside today\'s takes). At most ' +
+  'twelve words to a line, and no count, term or name from this session (a scene\'s nickname) a newcomer could ' +
+  'not read.'
 
 export const FORK_PROMPT =
   '[vantage-point] This message is from the vantage-point plugin, not the person. Do not use tools and do not ' +
   'answer your own question. Your last reply asked the person to decide something. Describe that decision as ' +
-  `JSON only, no code fence, in this shape: ${SHAPE}. headline: the concrete first step a yes starts, asked as a ` +
-  'question, twelve words or fewer, naming what is done to what (File findings 1-4 as a new issue, then close 121?), ' +
-  'never the options restated or a question about which to pick: the deck heads with it and says it nowhere else. ask: the ' +
-  'decision in one sentence. options: the two ' +
-  'or three you offered, as short imperative labels. dimensions: two or three questions that tell them apart. ' +
-  'One cell for every option and dimension: a value of three words or fewer, tone advantage (good), neutral ' +
-  '(middling) or tradeoff (bad). recommend: one option, exactly as written. ' +
-  'arguments: the one or two reasons the recommendation rests on, each with the fact behind it ' +
-  'as a tool output you saw in this session: claim, the reason in twelve words or fewer; call, a piece of that tool ' +
-  'call\'s input as you sent it (a file path, a command, a query), so the call can be found; fact, that output\'s data, ' +
-  'copied exactly, in one shape: {"shape": "table", "columns": [2 to 4 names], "rows": [[one cell per column]]} for ' +
-  'rows of values; {"shape": "bars", "series": [1 or 2 names], "rows": [{"label", "values": [one number per ' +
-  'series]}], "unit"?} for numbers to compare; {"shape": "terms", "terms": [{"term", "meaning"}]} for the words the ' +
-  'call turns on, defined where you read them; or, only when no table, bars or terms holds the data, {"shape": ' +
-  '"lines", "lines": "up to 12 lines"}, whole statements as printed, never a sentence cut off. Every cell, label, number and line must appear in that output as it printed them, or the fact is ' +
-  'dropped and only the claim shows. Take the data behind the reply, the rows, counts and definitions you read, ' +
-  'never the reply said again; leave out an argument no output backs. A claim says what its fact means for the ' +
-  'call, leaving the numbers to the fact, and links that to the option it backs; one command per fact. A claim says only what its fact shows, and ' +
-  'names every column its fact draws; the fact holds the rows the claim is about, first, and no rows it does not ' +
-  'use; name the series and columns in the claim\'s own words. Between them the arguments back every part of the ' +
-  'recommended option (to keep a thing and to raise it are two parts), or the option names only what they back. A ' +
-  'lines fact keeps the lines that say what its other lines belong to (an id, a name, a heading), and draws no line ' +
-  'its claim does not use. touches: for each option, up to six files or ADR documents it would change or ' +
-  'that govern it, as paths in the repository; leave out an option that touches none, and a path that does not ' +
-  'exist is dropped. picks: first rank the ' + `${DECK_CHOICES}` + ' techniques that would show this decision best, best ' +
-  'first, by asking each one\'s question of the decision, the shape the call actually turns on ' +
-  '(a flow, a line to clear, a split, a run of steps, a few figures), not the catch or the for and against every ' +
-  `call has; the deck draws the first ${DECK_PICKS} whose facts pass their checks. The techniques: ${PICKS_GUIDE}. facts: the ` +
-  'facts your picks read, and no other kind; write each as what it is, and include only facts the reply or the ' +
-  `files you read state. ${FACTS_GUIDE} If there is no real choice, reply {}.`
+  `JSON only, no code fence, in this shape: ${SHAPE}. headline: the question your options answer, in plain words ` +
+  'a newcomer reads, twelve words or fewer, naming no technical term; with three options, or two that are not a ' +
+  'yes and a no, it asks which, never "Should I ...?" (How should I record the film\'s product shots?): the band ' +
+  'and the deck head with it. ask: the ' +
+  'same question in one sentence. options: ' +
+  'the two or three you offered, as short imperative labels. dimensions: two or three questions that tell them ' +
+  'apart. One cell for every option and dimension: a value of three words or fewer, tone advantage (good), neutral ' +
+  '(middling) or tradeoff (bad). recommend: one option, exactly as written. pages: one for every option, not only ' +
+  'the recommended one, its option written exactly as in options. The person reads each page on its own tab, one ' +
+  'screen with no scrolling, and is not a specialist in this field: write in plain words. what: one sentence on what ' +
+  'the option is, for someone who has never heard of it. diagrams: 3 to 5. ' + DIAGRAMS_GUIDE + ' Use only what the ' +
+  'reply, the session or the files you read state; a guess says so ("untested"). If there is no real choice, reply {}.'
 
 /** The fork's prompt, told the wrap-up box's question when the reply asked there. */
 export function forkPrompt(wrap: WrapUpAsk | null): string {
@@ -338,83 +328,12 @@ export async function fitFields(raw: Record<string, unknown>, compress: Compress
   return out
 }
 
-/**
- * The fork's facts as the deck keeps them: every kind that passes its schema, less
- * `answers`; a kind that fails is dropped, not the deck. Undefined when none is left.
- */
-export function deckFacts(raw: unknown): Facts | undefined {
-  if (raw === undefined) return undefined
-  const { facts } = parseFacts(raw)
-  const kept = Object.fromEntries(Object.entries(facts).filter(([kind]) => (DECK_FACT_KINDS as readonly string[]).includes(kind)))
-  return Object.keys(kept).length === 0 ? undefined : (kept as Facts)
-}
-
-/** A source's path as the link that opens it: relative paths sit in the session's folder `cwd`. */
-export const fileUrl = (cwd: string) => (path: string) => `file://${path.startsWith('/') ? path : `${cwd.replace(/\/$/, '')}/${path}`}`
-
-/** The fork's picks that name a deck technique, in its order, at most `DECK_CHOICES`; empty when it named none. */
-export function picksOf(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return []
-  const ids = new Set(DECK_TECHNIQUES.map(one => one.id))
-  return [...new Set(raw.filter((one): one is string => typeof one === 'string').map(one => one.trim()))].filter(one => ids.has(one)).slice(0, DECK_CHOICES)
-}
-
-/**
- * The views a deck draws, from those its plan ranks: the fork's picks that can draw, in its order, then the
- * plan's best for any slot still empty, never two views of one fact; every ranked view for a deck from before picks.
- */
-export function deckViews(picks: readonly string[] | undefined, ranked: readonly string[]): string[] {
-  if (picks === undefined) return [...ranked]
-  const readsOf = (id: string) => DECK_TECHNIQUES.find(one => one.id === id)?.reads ?? id
-  const kept: string[] = []
-  for (const id of [...picks.filter(one => ranked.includes(one)), ...ranked]) {
-    if (kept.length === DECK_PICKS) break
-    if (!kept.includes(id) && !kept.some(one => readsOf(one) === readsOf(id))) kept.push(id)
-  }
-  return kept
-}
-
-/** The fork's JSON as a decision, or null when its structure is broken. Facts that fail are left out; with picks, so are facts no pick reads (#109). */
+/** The fork's JSON as a decision, each option's page with it (#134), or null when its structure is broken. A page that fails is left out. */
 export function decisionFromFork(raw: Record<string, unknown>): Decision | null {
   const decision = parseDecision(raw)
   if (decision === null) return null
-  const picks = picksOf(raw.picks)
-  const reads = new Set(DECK_TECHNIQUES.filter(one => picks.includes(one.id)).map(one => one.reads))
-  const all = deckFacts(raw.facts)
-  const facts = all === undefined || picks.length === 0 ? all : Object.fromEntries(Object.entries(all).filter(([kind]) => reads.has(kind as never))) as Facts
-  const kept = facts === undefined || Object.keys(facts).length === 0 ? undefined : facts
-  return { ...decision, ...(kept === undefined ? {} : { facts: kept }), ...(picks.length === 0 ? {} : { picks }) }
-}
-
-/** Reads a file's text; rejects when it is missing or unreadable. */
-export type ReadFile = (path: string) => Promise<string>
-
-/** An ADR's number as its file name writes it (`ADR-017-….md`, or `0017-….md` under an adr or decisions folder); null for any other file. */
-export function adrId(path: string): string | null {
-  const name = path.split('/').pop() ?? ''
-  const match = /^adr[-_ ]?(\d+)/i.exec(name) ?? (/(^|\/)(adr|adrs|decisions)\//i.test(path) ? /^(\d+)[-_]/.exec(name) : null)
-  return match === null || !name.toLowerCase().endsWith('.md') ? null : match[1]!
-}
-
-/**
- * The snapshot's paths, checked as quotes are: a path that cannot be read is dropped, and an
- * ADR whose status line says superseded is marked. Absent when no path is left.
- */
-export async function checkTouches(decision: Decision, read: ReadFile): Promise<Decision> {
-  if (decision.touches === undefined) return decision
-  const touches = await Promise.all(decision.touches.map(async paths => {
-    const kept: NonNullable<Decision['touches']>[number] = []
-    for (const touch of paths) {
-      const text = await read(touch.path).catch(() => null)
-      if (text === null) continue
-      const superseded = adrId(touch.path) !== null && /^\W*status\W*superseded/im.test(text.split('\n').slice(0, 20).join('\n'))
-      kept.push(superseded ? { path: touch.path, superseded: true } : { path: touch.path })
-    }
-    return kept
-  }))
-  const out: Decision = { ...decision, touches }
-  if (touches.every(paths => paths.length === 0)) delete out.touches
-  return out
+  const pages = pagesOf(raw.pages, decision.options)
+  return pages === undefined ? decision : { ...decision, pages }
 }
 
 /**

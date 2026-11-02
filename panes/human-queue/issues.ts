@@ -257,10 +257,10 @@ export function gist(body: string, max = 240): string {
   return `${cut.replace(/[\s,;:.\-–—]+$/, '')}…`
 }
 
-/** The ticket a session builds, read off its branch: `ticket/<n>-<slug>` or `spec/<n>-<slug>`. */
+/** The issue a session builds, read off its branch: `<word>/<n>-<slug>`, such as `issue/12-fix` or agent-config's `spec/7-…`. */
 export function branchIssue(branch: string): { kind: 'ticket' | 'spec'; number: number } | null {
-  const found = /^(ticket|spec)\/(\d+)(?:-|$)/.exec(branch.trim())
-  return found === null ? null : { kind: found[1] as 'ticket' | 'spec', number: Number(found[2]) }
+  const found = /^([\w.-]+)\/(\d+)(?:-|$)/.exec(branch.trim())
+  return found === null ? null : { kind: found[1] === 'spec' ? 'spec' : 'ticket', number: Number(found[2]) }
 }
 
 /** `owner/name` from an origin URL (https, ssh, or scp-like); null for anything not on github.com. */

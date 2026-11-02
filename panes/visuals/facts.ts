@@ -19,6 +19,13 @@ type Consequence = { does: string; cost?: number; upTo?: boolean; then?: string;
 export type Facts = {
   /** What yes and what no set off: every item card draws one answers view. */
   answers?: { yes: Consequence[]; no: Consequence[]; recommend: 'yes' | 'no'; why?: string; soWhat?: string }
+  /**
+   * Makes the item a pairwise ask (#125): the person picks A, B or Same, and
+   * nothing is recommended, since the order is blind. `key` says which system
+   * wrote A and which B; it is never drawn and rides through to the payload.
+   * Not a picture: it declares the item's kind.
+   */
+  pair?: { key?: { a: string; b: string } }
   /** Two or three values the ruling turns on. */
   figures?: Label[]
   /**
@@ -85,6 +92,7 @@ export type FactKind = keyof Facts
 
 export const FACT_KINDS: readonly FactKind[] = [
   'answers',
+  'pair',
   'figures',
   'comparison',
   'threshold',
@@ -301,6 +309,15 @@ function check(kind: FactKind, v: unknown, fail: Fail): unknown {
         })
       }
       return v
+    case 'pair':
+      if (!isObject(v)) return fail('', 'is { key? }: {} makes the item a pair')
+      for (const field of Object.keys(v)) if (field !== 'key') fail(field, 'is not a pair field (key)')
+      if (v.key !== undefined) {
+        if (!isObject(v.key)) return fail('key', 'is { a, b }: the system each side came from')
+        for (const side of ['a', 'b'] as const) if (!isText(v.key[side])) fail(`key.${side}`, 'is text: the system that wrote it')
+        for (const field of Object.keys(v.key)) if (field !== 'a' && field !== 'b') fail(`key.${field}`, 'is not a side (a, b)')
+      }
+      return v
     case 'tradeoffs':
       if (!isObject(v)) return fail('', 'is { pros, cons }')
       for (const side of ['pros', 'cons'] as const)
@@ -330,7 +347,7 @@ export const MIN_WORD_BUDGET = 60
 /** Words in one line of a tile; the why line and the so-what are sentences of their own. */
 export const LINE_WORDS = 12
 /** Fields that name a kind, a link or a name said elsewhere (a move's ends, a claim's source) rather than say anything new. */
-const UNSAID = new Set(['url', 'unit', 'trust', 'level', 'reach', 'better', 'recommend', 'favours', 'ruled', 'or', 'from', 'to', 'source'])
+const UNSAID = new Set(['key', 'url', 'unit', 'trust', 'level', 'reach', 'better', 'recommend', 'favours', 'ruled', 'or', 'from', 'to', 'source'])
 
 const wordCount = (text: string) => text.split(/\s+/).filter(Boolean).length
 
@@ -361,7 +378,7 @@ export function overBudget(facts: Facts, proseWords: number): string[] {
 /** A picture whose words the full text mostly never says would contradict it: below this share of its words found there, it is refused. */
 export const SAID_SHARE = 0.25
 /** Kinds exempt from it: `answers` is never drawn, and `terms` gives meanings the text leaves out on purpose. */
-const SAYS_MORE = new Set(['answers', 'terms', 'sources'])
+const SAYS_MORE = new Set(['answers', 'pair', 'terms', 'sources'])
 const COMMON = new Set(['about', 'after', 'also', 'before', 'from', 'have', 'into', 'just', 'more', 'most', 'only', 'over', 'same', 'some', 'than', 'that', 'their', 'them', 'then', 'there', 'these', 'they', 'this', 'what', 'when', 'where', 'which', 'while', 'will', 'with', 'would', 'your'])
 
 /** The content words of a text, each keyed by a stem so "reviewed" meets "reviewing" and "added" meets "adds". */

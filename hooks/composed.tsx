@@ -25,7 +25,6 @@ import { DRAWN_VIEWS, drawsWhole, PICTURES, threshold, type Picture } from '../p
 import { QUESTIONS, type Facts, type Question } from '../panes/visuals/facts'
 import { CARD_CAP, explainPage, MAX_TEXT_TILES, MAX_TILES, page, type Cap, type Tile } from '../panes/visuals/page'
 import { CARD_LINE, FILL, SIGNAL_YELLOW } from './signal'
-import { deckViews, NOT_ON_DECK } from './deck'
 import { views, type Views } from './views'
 
 type F = Required<Facts>
@@ -343,40 +342,4 @@ export function composedCard(
       </Box>
     </Box>
   )
-}
-
-/** The views a deck leaves out: the what-if's picker holds per-item state the deck keeps none of, and the glossary needs a Client. */
-
-/** About how many of the deck's 19pt rows a native view takes (docs/palette.md); an Svg's own height says it for a picture. */
-function nativeRows(id: string, facts: F): number {
-  if (id === 'ledger') return facts.comparison.rows.length * 2 + 2
-  if (id === 'table') return facts.comparison.rows.length + 2
-  if (id === 'sources') return facts.sources.claims.length * 2 + 1
-  return 4
-}
-
-export type DeckInput = { plan: Plan; surface: Surface; facts: Facts; question: string; room: number; newProps: boolean; picks?: readonly string[] }
-export type DeckPicture = { id: string; rows: number; node: RenderElement }
-
-/**
- * A deck decision's pictures (#100, #102): the context page's tile rows, each a
- * block of its own so the deck's pages carry as many as fit and the rest move
- * to the next page; the answers are left to the deck's own options. Empty when
- * no tile scores, so the deck reads as text.
- */
-export function deckPictures(el: ComposedElements, input: DeckInput): DeckPicture[] {
-  const p = drawable(input.plan)
-  const onDeck = p.views.filter(one => !NOT_ON_DECK.has(one.view))
-  // The fork's picks draw, best first, and the plan's best fill a slot a pick cannot (#109).
-  const plan = { ...p, views: deckViews(input.picks, onDeck.map(one => one.view)).flatMap(id => onDeck.filter(one => one.view === id)) }
-  const { pg, tile, height } = packed(el, { plan, surface: input.surface, facts: input.facts, question: input.question, room: input.room, budget: Infinity, scope: -1, pick: () => undefined, glossary: null, newProps: input.newProps, given: ['why'], cap: { tiles: MAX_TILES, text: MAX_TEXT_TILES } })
-  return pg.rows.map((row, i) => ({
-    id: row.map(one => one.view).join('+'),
-    rows: height(row),
-    node: (
-      <el.Box key={`deck-row-${i}`} flexDirection="row" columnGap={1} alignItems="flex-start" flexShrink={0}>
-        {row.map((one, j) => tile(one, j === row.length - 1))}
-      </el.Box>
-    ),
-  }))
 }

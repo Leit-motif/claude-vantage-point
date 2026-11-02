@@ -42,14 +42,17 @@ export function waitingTotal(waiting: CountObservation | null, local = 0): numbe
 
 /**
  * The agent pill. The stage (or the status that replaces it) and a spec's closed
- * sub-issues describe this issue; the count in parentheses is every ready ticket,
- * which is what the pill opens. With no stage, the count stands alone in parentheses.
+ * sub-issues describe this issue; the count is what the pill opens. With this
+ * project's frontier read (issue 128) it is the you pill's grammar: this project's
+ * ready count, then every repository's in parentheses when that differs (`0 (4)`).
+ * Without it, every ready ticket in parentheses, alone when there is no stage.
  */
-export function agentPill(stage: string | null, progress: { closed: number; total: number } | null, ready: CountObservation | null, now: number): string {
-  const count = countText(ready) ?? '—'
+export function agentPill(stage: string | null, progress: { closed: number; total: number } | null, ready: CountObservation | null, now: number, project: number | null = null): string {
+  const all = countText(ready)
   const fraction = progress !== null && progress.total > 0 ? `${progress.closed}/${progress.total}` : null
   const head = [stage, fraction].filter((part): part is string => part !== null && part !== '').join(' ')
-  return `${head === '' ? `(${count})` : `${head} (${count})`}${ageOf(ready, now)}`
+  const count = project === null ? `(${all ?? '—'})` : all === null || Number(all) === project ? String(project) : `${project} (${all})`
+  return `${head === '' ? count : `${head} ${count}`}${ageOf(ready, now)}`
 }
 
 /**

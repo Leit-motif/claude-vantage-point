@@ -158,36 +158,40 @@ export type HumanQueueDecision = {
   sends?: string[]
   /** A permission ask's call (`callKey`): pressing the first option lets it run once when the agent repeats it. */
   grant?: string
-  /** The catalog techniques the fork picked to draw this decision, best first (#109). */
-  picks?: string[]
   /**
-   * The files and ADRs each option would change or is governed by, by option index: the
-   * deck's snapshot draws them (issue 81). `superseded` marks an ADR whose status says so.
+   * Each option's page in the Decision pane (#134), by option index: what the option is, then the
+   * diagrams that make its case. Absent where the fork wrote none; that option's tab draws its cells.
    */
-  touches?: HumanQueueTouch[][]
-  /**
-   * The decision's facts, keyed by fact kind as a queue item's `vantage-facts` block is
-   * (panes/visuals/facts.ts), less `answers`: the composer draws its pictures on the
-   * Decision page (#100). Held as checked JSON; this file imports nothing.
-   */
-  facts?: Record<string, unknown>
-  /**
-   * The arguments the call rests on (#110), at most two: each a claim and, once checked, the tool output it came
-   * from, drawn as data under it. A claim whose fact no call's output holds keeps no `from`, `output` or `fact`.
-   */
-  arguments?: HumanQueueArgument[]
+  pages?: (HumanQueueOptionPage | null)[]
 }
-export type HumanQueueTouch = { path: string; superseded?: true }
-/** One argument of a decision (#110): its claim, the call it came from as its chip names it, that call's lines, and its fact. */
-export type HumanQueueArgument = { claim: string; from?: string; output?: string; fact?: HumanQueueFact }
-/** The data under an argument, every cell and number of it found in its call's output. */
-export type HumanQueueFact =
-  | { shape: 'table'; columns: string[]; rows: string[][] }
-  | { shape: 'bars'; series: string[]; rows: { label: string; values: number[] }[]; unit?: string }
-  | { shape: 'terms'; terms: { term: string; meaning: string }[] }
-  | { shape: 'lines'; lines: string }
-/** Which page of the decision deck shows, and the source a citation opened (1-based). */
-export type HumanQueueDeckPage = { page: number; source: number | null }
+/** One option's page (#134): a sentence on what it is, then its diagrams, each titled with the point it makes. */
+export type HumanQueueOptionPage = { what: string; diagrams: HumanQueueDiagram[] }
+/**
+ * What a diagram argues: why (or why you'd pick it), how it works, who does the work, what the agent
+ * controls, why the agent passed it over, or what could go wrong.
+ */
+export type HumanQueueDiagramPoint = 'why' | 'how' | 'work' | 'control' | 'passed' | 'risk'
+/** One diagram: its title is the point it makes, `says` the sentence under it, `terms` the words it explains. */
+export type HumanQueueDiagram = {
+  point: HumanQueueDiagramPoint
+  title: string
+  draw: HumanQueueDiagramDraw
+  says?: string
+  terms?: { term: string; meaning: string }[]
+}
+/**
+ * A diagram's picture. bars: values to compare, the one the point is about lit; route: stages left to
+ * right, each one or more alternatives, the option's own path lit; work: the minutes each side spends;
+ * lines: short statements; risk: what could go wrong and the fallback if it does.
+ */
+export type HumanQueueDiagramDraw =
+  | { shape: 'bars'; rows: { label: string; value: number; unit?: string; lit?: boolean }[] }
+  | { shape: 'route'; stages: { name: string; note?: string; lit?: boolean }[][] }
+  | { shape: 'work'; rows: { who: 'me' | 'you'; minutes: number; plus?: string }[] }
+  | { shape: 'lines'; lines: { text: string }[] }
+  | { shape: 'risk'; risks: { risk: string; why?: string; fallback: string }[] }
+/** The option tab the Decision pane shows, and the question it was picked on: another question opens on its recommendation. */
+export type HumanQueueDeckPage = { tab: number; ask: string }
 /** A successful GitHub observation and whether its latest refresh failed. Unknown is not zero. */
 export type HumanQueueCountObservation = { value: number | null; at: number | null; stale: boolean }
 
@@ -227,6 +231,15 @@ export type HumanQueueSubagentMeta = {
   toolAt?: number
 }
 
+/** One background task this session's agent started (issue 126): a backgrounded shell, a monitor, kept after it ends. */
+export type HumanQueueBackground = { id: string; tool: string; description: string; command?: string; status: string; startedAt: number; endedAt?: number }
+
+/**
+ * A desktop session this session started (issue 129): its `local_<id>`, its title, its model when
+ * known, whether its turn runs, and when it started and its transcript was last written.
+ */
+export type HumanQueueChildSession = { local: string; title: string; model?: string; status: 'running' | 'idle' | 'archived'; startedAt: number; touchedAt: number }
+
 /** The ticket the Ticket pane shows, as gh read it when the pane opened. */
 export type HumanQueueTicketPage = {
   key: string
@@ -243,12 +256,11 @@ export type HumanQueueTicketPage = {
 export type HumanQueueFrontier =
   | { state: 'unknown' }
   | { state: 'failed'; reason: string }
-  | { state: 'read'; repo: string; frontier: HumanQueueFrontierRead; scriptAt: number | null }
+  | { state: 'read'; repo: string; frontier: HumanQueueFrontierRead }
 /** One frontier read; the same shape as hooks/frontier.ts's Frontier. */
 export type HumanQueueFrontierRead = {
-  source: 'script' | 'labels'
-  spec: number | null
-} & Record<'ready' | 'ownerOnly' | 'claimed' | 'blocked' | 'paused' | 'refused', { number: number; title: string }[]>
+  items: { number: number; title: string; state: 'waiting' | 'accepting' | 'active' | 'ready' | 'blocked' | 'shaping' | 'parked' | 'open' }[]
+}
 export type HumanQueueReady = { key: string; repo: string; number: number; title: string; createdAt: string }[] | null
 
 /** A ticket the session's last reply names in this project's repositories; `repo` is resolved, `label` is what the row says. */
@@ -360,8 +372,12 @@ declare module 'claude-code' {
       here: string | null
       /** The ready-for-agent issues the agent's pane lists; null before it first opens. */
       ready: HumanQueueReady
-      /** This project's frontier: what is ready for an agent here, and what is not and why. */
-      frontier: HumanQueueFrontier
+      /** This project's frontier (issue 115): every open issue here, each in one state. */
+      frontierList: HumanQueueFrontier
+      /** Whether the Frontier pane shows the issues past what waits on the person and what is next. */
+      frontierRest: boolean
+      /** Which scope the Frontier pane shows: this session's repository, or every repository of the owner's. */
+      frontierScope: 'here' | 'all'
       /** The ticket the Ticket pane shows; null before one is opened. */
       ticketPage: HumanQueueTicketPage
       /** What this session's agent says it is doing now; null until it says, or once it clears it. */
@@ -379,14 +395,18 @@ declare module 'claude-code' {
       /** The session cards proposed in the turn the decision came from, and when it was made: starting one from its chip takes the step the decision recommends (#67). */
       decisionCards: { tasks: string[]; since: number }
       deckPage: HumanQueueDeckPage
-      /** The quote a source chip opened under its sentence, as `field-sentence-source` (#108). */
-      deckQuote: string | null
       /** This session's subagents, kept after the engine drops them; [] before the first. */
       subagents: HumanQueueSubagent[]
       /** What the hooks saw of each subagent, by its id. */
       subagentMeta: Record<string, HumanQueueSubagentMeta>
       /** The clock at the last read while a subagent ran: the band's elapsed times redraw from it. */
       subagentNow: number
+      /** This session's background tasks, kept after they end; [] before the first (issue 126). */
+      backgrounds: HumanQueueBackground[]
+      /** The desktop sessions this session started, as the last cache scan found them (issue 129). */
+      childSessions: HumanQueueChildSession[]
+      /** The idle child sessions `clear finished` hid; one that runs again shows again. */
+      childCleared: string[]
       /** True while the subagents row is open. */
       subagentsOpen: boolean
       /** The subagent whose detail the open row shows; null for none. */

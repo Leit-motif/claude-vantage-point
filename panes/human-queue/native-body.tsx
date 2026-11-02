@@ -13,6 +13,12 @@ import type { Block, Run } from './markdown.ts'
 export type BodyProps = {
   /** One dot per item, in its colour; the one at `current` is drawn hollow (◎), so the place shows whatever its state. Empty for a plain ask. */
   dots: string[]
+  /**
+   * A pair item's pick drawn in place of its dot, `A`, `S` or `B` (#125, ADR 0049): its three
+   * verdicts share one colour, so only the glyph can say which was given. Null
+   * where the dot stays a dot; absent for a request with no pair.
+   */
+  marks?: (string | null)[]
   /** 1-based. */
   current: number
   /** Empty over a composed item, which draws no ask block. */
@@ -54,7 +60,14 @@ const Body: ClientModule<BodyProps, true> = (props, surface) => {
         <Box key="strip" flexDirection="row" columnGap={1} flexShrink={0}>
           {props.dots.map((color, i) => (
             <Box key={`strip-${i + 1}`}>
-              <Text color={color}>{i + 1 === props.current ? '◎' : '●'}</Text>
+              {/* A pick at the place is underlined, as ◎ marks the place on a dot. */}
+              {props.marks?.[i] == null ? (
+                <Text color={color}>{i + 1 === props.current ? '◎' : '●'}</Text>
+              ) : (
+                <Text color={color} underline={i + 1 === props.current}>
+                  {props.marks[i]}
+                </Text>
+              )}
             </Box>
           ))}
         </Box>

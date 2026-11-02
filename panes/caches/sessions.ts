@@ -16,9 +16,10 @@ export const DESKTOP_SESSIONS = 'Library/Application Support/Claude/claude-code-
 
 /**
  * What one session file says: its transcript's id, its own, whether it is archived, whether a pull
- * request of its merged (`prs[].state`), and the session that started it (`spawnedFrom`).
+ * request of its merged (`prs[].state`), the session that started it (`spawnedFrom`), and, when it
+ * says, its title, model and start (the band's child sessions, issue 129).
  */
-export type DesktopSession = { cli: string; local: string; archived: boolean; merged: boolean; parent?: string }
+export type DesktopSession = { cli: string; local: string; archived: boolean; merged: boolean; parent?: string; title?: string; model?: string; createdAt?: number }
 
 const LOCAL = /^local_[A-Za-z0-9-]{1,64}$/
 
@@ -27,11 +28,20 @@ export function parseDesktopSession(text: string): DesktopSession | null {
   let entry: unknown
   try { entry = JSON.parse(text) } catch { return null }
   if (typeof entry !== 'object' || entry === null) return null
-  const { cliSessionId, sessionId, isArchived, prs, spawnedFrom } = entry as Record<string, unknown>
+  const { cliSessionId, sessionId, isArchived, prs, spawnedFrom, title, model, createdAt } = entry as Record<string, unknown>
   if (typeof cliSessionId !== 'string' || cliSessionId === '' || typeof sessionId !== 'string' || !LOCAL.test(sessionId)) return null
   const merged = Array.isArray(prs) && prs.some(pr => typeof pr === 'object' && pr !== null && (pr as Record<string, unknown>).state === 'MERGED')
   const parent = typeof spawnedFrom === 'object' && spawnedFrom !== null ? (spawnedFrom as Record<string, unknown>).sessionId : undefined
-  return { cli: cliSessionId, local: sessionId, archived: isArchived === true, merged, ...(typeof parent === 'string' && LOCAL.test(parent) ? { parent } : {}) }
+  return {
+    cli: cliSessionId,
+    local: sessionId,
+    archived: isArchived === true,
+    merged,
+    ...(typeof parent === 'string' && LOCAL.test(parent) ? { parent } : {}),
+    ...(typeof title === 'string' && title !== '' ? { title } : {}),
+    ...(typeof model === 'string' && model !== '' ? { model: model.replace(/^claude-/, '') } : {}),
+    ...(typeof createdAt === 'number' && Number.isFinite(createdAt) ? { createdAt } : {}),
+  }
 }
 
 /** The desktop session that holds the cache's transcript, the one not archived when two name it; undefined when none does. */

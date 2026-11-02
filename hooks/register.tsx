@@ -14,7 +14,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren, RenderElement, RenderInput, RenderSurface, TurnStepChunk, TurnStepResult } from 'claude-code'
 
-import type { HumanQueueBannerPlaced, HumanQueueEdited, HumanQueueGoverning, HumanQueueCache, HumanQueueFrontier, HumanQueueAgentNext, HumanQueueDeckPage, HumanQueueAgentBranch, HumanQueueAsk, HumanQueueDecision, HumanQueueFact, HumanQueueReady, HumanQueueReading, HumanQueueReplyTicket, HumanQueueTask, HumanQueueTicketPage, HumanQueueTicketState, HumanQueueCapture, HumanQueueIssue, HumanQueueSubmission, HumanQueueUndo, HumanQueueView, HumanQueueComposedView, HumanQueueGrading, HumanQueueStep } from '../types'
+import type { HumanQueueBannerPlaced, HumanQueueEdited, HumanQueueGoverning, HumanQueueCache, HumanQueueFrontier, HumanQueueAgentNext, HumanQueueDeckPage, HumanQueueAgentBranch, HumanQueueAsk, HumanQueueDecision, HumanQueueReady, HumanQueueReading, HumanQueueReplyTicket, HumanQueueTask, HumanQueueTicketPage, HumanQueueTicketState, HumanQueueCapture, HumanQueueIssue, HumanQueueSubmission, HumanQueueUndo, HumanQueueView, HumanQueueComposedView, HumanQueueGrading, HumanQueueStep } from '../types'
 import { DESKTOP_CHARS_PER_CELL, shortTitle, titleRoom } from '../panes/band/title'
 import { PANEL, picture } from '../panes/reader/picture'
 import { SPEED_STEP } from '../panes/reader/reading'
@@ -73,6 +73,8 @@ import {
   parse,
   parseIssueRef,
   parseRuling,
+  tallyText,
+  VERDICTS,
   rulingLineOf,
   rulingsComment,
   setNote,
@@ -81,20 +83,20 @@ import {
   writeFieldLine,
   writeRulingLine,
 } from '../panes/human-queue/queue'
-import type { Item, Request } from '../panes/human-queue/queue'
+import type { Item, Request, Verdict } from '../panes/human-queue/queue'
 import { agentPill, youPill, freshCount, freshPill, staleCount, readSpecProgress, waitingTotal, NEW_ASK_MS } from './band'
 import type { CountObservation } from './band'
-import { withoutGist, asButtons, boxlessWrapUp, callKey, checkTouches, deckFacts, decisionFromFork, fileUrl, decisionOfPermission, decisionOfQuestions, modeOf, projectFolder, ROW_MODES, decisionOfWrapUp, optionSends, fitFields, forkPrompt, GATE_MODEL, GATE_SYSTEM, gateText, isYes, looksLikeDecision, parseForkJson, PERSON_TOOLS, proposedCard, startedCard, WRAP_UP_TOOL, wrapUpAsk } from './deck'
+import { withoutGist, asButtons, boxlessWrapUp, callKey, decisionFromFork, decisionOfPermission, decisionOfQuestions, modeOf, projectFolder, ROW_MODES, decisionOfWrapUp, optionSends, fitFields, forkPrompt, GATE_MODEL, GATE_SYSTEM, gateText, isYes, looksLikeDecision, parseForkJson, PERSON_TOOLS, proposedCard, startedCard, WRAP_UP_TOOL, wrapUpAsk } from './deck'
 import type { WrapUpAsk } from './deck'
-import { snapshot } from './snapshot'
 import { governingOf, type BannerIO } from './banner'
 import { banner, bannerWidth, type BandRow } from '../panes/banner/picture'
 import { EDIT_TOOLS, editDelta, recordEdit } from '../panes/banner/edits'
-import { fromLabels, fromScript, GROUPS, inFlightSpec, nextOf, parseRepoIssues } from './frontier'
+import { frontierOf, labelMap, nextOf, parseRepoIssues, readyCount, STATES as FRONTIER_STATES, viewOf, type FrontierItem } from './frontier'
 import { STATE_SECTION, stateLine } from './state'
-import { counts as teamCounts, detail, elapsed, freshMeta, isFailed, isLive, mergeListed, modelOf, ordered, rowFacts, ROOM, waitingOn } from './subagents'
-import type { Subagent, SubagentMeta } from './subagents'
+import { childCounted, childFacts, SESSION_SHAPE, SUBAGENT_SHAPE, TASK_SHAPE, childOf, childrenOf, CHILD_STALE_MS, counts as teamCounts, detail, elapsed, ended, freshMeta, isChildRunning, isFailed, isLive, isRunning, launched, mergeListed, midTurn, modelOf, notified, ordered, orderedChildren, orderedTasks, rowFacts, ROOM, taskFacts, taskLabel, waitingOn } from './subagents'
+import type { Background, ChildSession, Subagent, SubagentMeta } from './subagents'
 import { applyCall, cardLines, doneOf, finished, linesOf, renamedPlans, stepsOfCalls, STEPS_TOOL, UPDATE_PLAN_TOOL } from './steps'
+import { RESUME_DELAY_MS, resumePath, resumePrompt } from './resume'
 import { endReader, isHeld, pacingOf, speedReader, startReader, switchLevel, toggleReader } from './reader'
 import { GIST_SECTION, splitGist } from '../panes/reader/gist'
 import type { ReaderIO } from './reader'
@@ -108,16 +110,16 @@ import { album as drawAlbum, ALBUM_PAGES, ALBUM_START } from './album'
 import { grading as drawGrading } from './grading'
 import { FIRST_RUN, tour as drawTour, tourText, TOUR_STOPS, type TourKey, type TourSetup } from './tour'
 import { gradeCases, gradesMessage, type GradeCase } from '../panes/visuals/grading'
-import { composedCard, deckPictures } from './composed'
+import { composedCard } from './composed'
 import { plan as planOf, type ComposeItem, type Plan } from '../panes/visuals/compose'
-import { cardWidth, evidenceBars, evidenceBarsWidth } from '../panes/visuals/draw'
-import { eligible } from '../panes/visuals/facts'
-import { argumentsOf, checkArguments, isNumbered, numberedLine } from './evidence'
+import { cardWidth } from '../panes/visuals/draw'
+import { sfWidth } from '../panes/svg'
+import { chromeHeight, columnsOf, type Diagram, diagramPicture, fitDiagrams, paneHeight, pictureRoom, rowsOf, WIDE_ROOM, workScale } from '../panes/visuals/options'
 import { access, composer } from '../panes/visuals/jev'
-import { composeDecision, composeItem, isShared, needsPlan, planKey, PROSE_OPENS_KEY, readSlot } from '../panes/visuals/plans'
+import { composeItem, isShared, needsPlan, planKey, PROSE_OPENS_KEY, readSlot } from '../panes/visuals/plans'
 import type { PlanSlot } from '../panes/visuals/plans'
 import type { NativeCard } from './native-card'
-import { CARD_LINE, FILL, MERGED, QUIET, RECOMMENDED, REST_LINE, SIGNAL_BLUE, SIGNAL_RED, SIGNAL_YELLOW } from './signal'
+import { CARD_LINE, FILL, MERGED, PANE as GROUND, QUIET, RECOMMENDED, REST_LINE, SIGNAL_BLUE, SIGNAL_GOLD, SIGNAL_RED, SIGNAL_YELLOW, TEXT } from './signal'
 import { CACHE_TONE, linkDesks, projectsRoot, scanCaches, scanDesktopSessions } from './caches'
 import type { CacheIO, SessionFiles } from './caches'
 import { cachesAt, facts as factsOf, hitLabel, isChild, isWarm, kindCounts, leftLabel, passes, RESPONSES_AWK, SHOW_ALL, stateOf, tokens, touch, treeOf } from '../panes/caches/caches'
@@ -129,8 +131,8 @@ import { CONTEXT_HIGH, contextLabel } from '../panes/caches/context'
 import { freshBrief, handbackOf, isHandbackOf } from '../panes/human-queue/handback'
 import { screenSvg } from './screen'
 import { refusal } from './refusal'
-import { FETCH_SCRIPT, fetchArgs, fetchOf, legible, loadedOf, nameOf, pictureSvg, picturesOf, withoutPictures } from '../panes/human-queue/pictures'
-import type { Loaded, Picture } from '../panes/human-queue/pictures'
+import { FETCH_SCRIPT, fetchArgs, fetchOf, legible, loadedOf, nameOf, NOT_A_FILM, pictureSvg, picturesOf, playLabel, SIZE, sizeOf, stripsOf, TREE_PICTURES, VIDEO_SCRIPT, videoOf, withoutPictures } from '../panes/human-queue/pictures'
+import type { Loaded, Picture, Strip, Video } from '../panes/human-queue/pictures'
 import type { Screen, ScreenRequest } from './screen'
 
 type $ = EngineInterface
@@ -144,9 +146,10 @@ const TICKET_PANE = 'human-queue-ticket'
 const TASK_PANE = 'human-queue-task'
 /** The pane a declared decision opens in: the grid under the reply row. */
 const DECISION_PANE = 'human-queue-decision'
+/** A Decision pane column in points, the card lab's measure: 128 columns drew a 1129pt body and 31 a 274pt one (desktop, 2026-11-02, #134). */
+const DECK_COLUMN_PT = 8.8
 const FRONTIER_PANE = 'human-queue-frontier'
 /** The agent's zoom-out: every issue ready for an agent, by repo. */
-const READY_PANE = 'human-queue-ready'
 /** The palette specimen (docs/palette.md), behind `/vantage-point palette` and nowhere else. */
 const PALETTE_PANE = 'human-queue-palette'
 /** The mock album: every way to draw an ask, tried on a real one, behind `/vantage-point album`. */
@@ -240,6 +243,7 @@ async function isCommentOpen($: $): Promise<boolean> {
 
 /** Opens or shuts this session's comment field, and only this session's. */
 async function setCommentOpen($: $, open: boolean): Promise<void> {
+  commentFolded = false
   const id = await $.session.id().catch(() => '?')
   await update($, commentOpenIn, ids => (open ? [...ids.filter(one => one !== id), id] : ids.filter(one => one !== id)))
 }
@@ -254,7 +258,9 @@ const agentBranch = atom({ plugin: 'vantage-point', key: 'agentBranch' } as cons
 const task = atom({ plugin: 'vantage-point', key: 'task' } as const, null as HumanQueueTask)
 const here = atom({ plugin: 'vantage-point', key: 'here' } as const, null as string | null)
 const ready = atom({ plugin: 'vantage-point', key: 'ready' } as const, null as HumanQueueReady)
-const frontier = atom({ plugin: 'vantage-point', key: 'frontier' } as const, { state: 'unknown' } as HumanQueueFrontier)
+const frontier = atom({ plugin: 'vantage-point', key: 'frontierList' } as const, { state: 'unknown' } as HumanQueueFrontier)
+const frontierRest = atom({ plugin: 'vantage-point', key: 'frontierRest' } as const, false)
+const frontierScope = atom({ plugin: 'vantage-point', key: 'frontierScope' } as const, 'here' as 'here' | 'all')
 const ticketPage = atom({ plugin: 'vantage-point', key: 'ticketPage' } as const, null as HumanQueueTicketPage)
 const peek = atom({ plugin: 'vantage-point', key: 'peek' } as const, null as 'human' | 'agent' | null)
 /** The Reader holding the band (issue #35); null while the band shows its rows. */
@@ -266,9 +272,8 @@ const unseenSince = atom({ plugin: 'vantage-point', key: 'unseenSince' } as cons
 const decision = atom({ plugin: 'vantage-point', key: 'decision' } as const, null as HumanQueueDecision | null)
 const decisionCards = atom({ plugin: 'vantage-point', key: 'decisionCards' } as const, { tasks: [] as string[], since: 0 })
 /** Which deck page shows, and the source a citation opened. */
-const deckPage = atom({ plugin: 'vantage-point', key: 'deckPage' } as const, { page: 0, source: null } as HumanQueueDeckPage)
+const deckPage = atom({ plugin: 'vantage-point', key: 'deckPage' } as const, { tab: 0, ask: '' } as HumanQueueDeckPage)
 /** The quote a source chip opened under its sentence, as `field-sentence-source` (#108); null, none. */
-const deckQuote = atom({ plugin: 'vantage-point', key: 'deckQuote' } as const, null as string | null)
 /** Tickets the last reply names, their cards, and which rows the Tickets page has open. Cleared with the decision. */
 const replyTickets = atom({ plugin: 'vantage-point', key: 'replyTickets' } as const, [] as HumanQueueReplyTicket[])
 const ticketStates = atom({ plugin: 'vantage-point', key: 'ticketStates' } as const, {} as Record<string, HumanQueueTicketState>)
@@ -276,6 +281,9 @@ const ticketOpen = atom({ plugin: 'vantage-point', key: 'ticketOpen' } as const,
 const subagents = atom({ plugin: 'vantage-point', key: 'subagents' } as const, [] as Subagent[])
 const subagentMeta = atom({ plugin: 'vantage-point', key: 'subagentMeta' } as const, {} as Record<string, SubagentMeta>)
 const subagentNow = atom({ plugin: 'vantage-point', key: 'subagentNow' } as const, 0)
+const backgrounds = atom({ plugin: 'vantage-point', key: 'backgrounds' } as const, [] as Background[])
+const childSessions = atom({ plugin: 'vantage-point', key: 'childSessions' } as const, [] as ChildSession[])
+const childCleared = atom({ plugin: 'vantage-point', key: 'childCleared' } as const, [] as string[])
 const subagentsOpen = atom({ plugin: 'vantage-point', key: 'subagentsOpen' } as const, false)
 const subagentPick = atom({ plugin: 'vantage-point', key: 'subagentPick' } as const, null as string | null)
 /** The agent's task list, as its calls left it (issue 104). */
@@ -325,9 +333,19 @@ let windowOffset = 0
 let lastAct = { key: '', at: 0, from: '' }
 /** The native card's unsaved comments, by draftKey: typing reaches here without a redraw. */
 const drafts = new Map<string, string>()
+/** Whether the queue pane held the keyboard when it last drew, so a draw can tell it has just lost it (#120). */
+let paneHadKeyboard = false
+/** The comment field closed by the pane losing the keyboard, its draft kept; opening or closing it clears this. */
+let commentFolded = false
 // The pictures asks embed, by link: loaded, failed, or still fetching. In memory only, since a
 // picture's base64 is too big for the store; the PNG itself is cached on disk (issue 87).
+// Each strip is its own copy, so a tall mock stays sharp (#136): keyed by link and strip.
 const pictures = new Map<string, Loaded | 'failed' | 'pending'>()
+// Each picture's size, by link, read before its strips are cut (#136).
+const pictureSizes = new Map<string, { file: string; width: number; height: number } | 'failed' | 'pending'>()
+// The videos asks embed, by link: fetched to disk, failed, or still fetching (#132).
+// 'image' is a bare attachment link the fetch found to be a picture (#135).
+const videos = new Map<string, Video | 'failed' | 'pending' | 'image'>()
 /** File hand-backs and this session's issue undo windows, by qualified id. */
 const pending = new Map<string, { cancel: () => void }>()
 /** Issues this session is sending now. */
@@ -357,6 +375,8 @@ async function takeState($: $): Promise<string | null> {
 
 async function clearDecision($: $): Promise<void> {
   await update($, decision, () => null)
+  // The next decision opens on its recommendation, even one that asks the same question.
+  await update($, deckPage, () => ({ tab: 0, ask: '' }))
   await update($, decisionCards, () => ({ tasks: [], since: 0 }))
   await update($, replyTickets, () => [])
 }
@@ -632,16 +652,6 @@ async function readReady($: $): Promise<boolean> {
   }
 }
 
-// The script walks a spec's whole graph through gh, so it runs at most this often
-// unless the person opens the pane; the labels are one read and follow the issue poll.
-const SCRIPT_EVERY_MS = 10 * 60_000
-
-/** The frontier script's path from the plugin's settings; '' when unset. */
-async function frontierScript($: $): Promise<string> {
-  const row = (await $.config.list().catch(() => [])).find(r => r.key === 'vantage-point.frontierScript')
-  return typeof row?.value === 'string' ? row.value.trim() : ''
-}
-
 /** Whether the mod asks agents for a gist the Reader plays (#112): on unless the setting is off. */
 async function readerGist($: $): Promise<boolean> {
   const row = (await $.config.list().catch(() => [])).find(r => r.key === 'vantage-point.readerGist')
@@ -649,11 +659,11 @@ async function readerGist($: $): Promise<boolean> {
 }
 
 /**
- * Reads this project's frontier into `frontier` (issue 16): spec-frontier.mjs for the
- * spec in flight when the script is set and present, else the repo's labels. A failed
- * read says why; it never stands in an empty frontier.
+ * Reads this project's frontier into `frontier` (issue 115): every open issue, placed through
+ * the label map, which the repo's docs/agents/triage-labels.md renames when it has one.
+ * A failed read says why; it never stands in an empty frontier.
  */
-async function readFrontier($: $, force = false): Promise<void> {
+async function readFrontier($: $): Promise<void> {
   const repo = await read($, here)
   if (repo === null) return
   let issues
@@ -664,46 +674,18 @@ async function readFrontier($: $, force = false): Promise<void> {
     await update($, frontier, () => ({ state: 'failed' as const, reason: `could not read ${repo}'s issues (${error instanceof Error ? error.message : String(error)})` }))
     return
   }
+  const root = await $.process.run(['git', '-C', await $.session.cwd(), 'rev-parse', '--show-toplevel'], { timeoutMs: 5000 }).catch(() => null)
+  const triage = root?.exitCode === 0 ? await $.fs.read(`${root.stdout.trim()}/docs/agents/triage-labels.md`).then(String, () => null) : null
+  const found = frontierOf(issues, labelMap(triage))
   const held = await read($, frontier)
-  const now = await $.clock.now()
-  const spec = inFlightSpec(issues)
-  const script = await frontierScript($)
-  const hasScript = script !== '' && await $.fs.exists(script).catch(() => false)
-  if (spec !== null && hasScript) {
-    const fresh = held.state === 'read' && held.repo === repo && held.frontier.source === 'script' && held.frontier.spec === spec
-      && held.scriptAt !== null && now - held.scriptAt < SCRIPT_EVERY_MS
-    if (fresh && !force) return
-    // The script calls gh itself, past the runner's pacing. While GitHub has paused, what is held stays,
-    // or the labels' frontier stands in: a pause that lifts by itself is not a failure.
-    const isPaused = (await pausedNow(pauseIO($), BUDGETS)) !== null
-    if (isPaused && held.state === 'read') return
-    if (!isPaused) {
-      let ran
-      try {
-        ran = await $.process.run(['node', script, String(spec), '--repo', repo, '--json'], { timeoutMs: 120_000 })
-      } catch (error) {
-        await update($, frontier, () => ({ state: 'failed' as const, reason: `spec-frontier.mjs could not run (${String(error)})` }))
-        return
-      }
-      if (ran.exitCode !== 0) await noteRefusal((argv, init) => $.process.run(argv, init), pauseIO($), ['core', 'graphql'], ran.stderr)
-      // 0 admitted and 1 not admitted both print the frontier; anything else printed none.
-      try {
-        if (ran.exitCode !== 0 && ran.exitCode !== 1) throw new Error(ran.stderr.trim().split('\n')[0] || `exit ${ran.exitCode}`)
-        const found = fromScript(ran.stdout, spec)
-        await update($, frontier, () => ({ state: 'read' as const, repo, frontier: found, scriptAt: now }))
-      } catch (error) {
-        await update($, frontier, () => ({ state: 'failed' as const, reason: `spec-frontier.mjs for #${spec}: ${error instanceof Error ? error.message : String(error)}` }))
-      }
-      return
-    }
-  }
-  const labels = fromLabels(issues)
-  if (held.state === 'read' && JSON.stringify(held.frontier) === JSON.stringify(labels) && held.repo === repo) return
-  await update($, frontier, () => ({ state: 'read' as const, repo, frontier: labels, scriptAt: null }))
+  if (held.state === 'read' && held.repo === repo && JSON.stringify(held.frontier) === JSON.stringify(found)) return
+  await update($, frontier, () => ({ state: 'read' as const, repo, frontier: found }))
 }
 
-async function openFrontier($: $): Promise<void> {
-  await readFrontier($, true).catch(() => undefined)
+/** Opens the Frontier (issue 142) on `scope`; outside a GitHub repository it can only show every repository. */
+async function openFrontier($: $, scope: 'here' | 'all' = 'here'): Promise<void> {
+  await update($, frontierScope, () => scope)
+  await (scope === 'here' ? readFrontier($) : readReady($)).catch(() => undefined)
   await $.ui.open({ id: FRONTIER_PANE, title: 'Frontier', focus: true })
 }
 
@@ -737,12 +719,41 @@ async function scanCachesNow($: $): Promise<void> {
     desktopSessions = home === undefined || home === '' ? new Map() : await scanDesktopSessions(io, home, desktopSessions)
     const linked = linkDesks(found, desktopSessions)
     await update($, caches, () => ({ at: now, caches: linked }))
+    await readChildren($, linked, now).catch(() => undefined)
     await retitleCaches($, linked, now).catch(() => undefined)
     await loadWarmths($)
     await scheduleWarm($)
   } finally {
     cacheScanning = false
   }
+}
+
+/**
+ * The sessions this one started in the desktop (issue 129), from the scan's session files: a child
+ * written within CHILD_STALE_MS has its transcript's tail read, which says whether its turn runs.
+ */
+async function readChildren($: $, linked: readonly HumanQueueCache[], now: number): Promise<void> {
+  const sessions = [...desktopSessions.values()].flatMap(f => (f.session === null ? [] : [f.session]))
+  const rows = await Promise.all(childrenOf(sessions, await $.session.id()).map(async kid => {
+    const cache = linked.find(c => c.kind === 'session' && c.desk?.local === kid.local)
+    if (cache === undefined) return childOf(kid, undefined, now)
+    const open = !kid.archived && now - cache.touchedAt < CHILD_STALE_MS ? midTurn(await transcriptTail($, cache.file)) : false
+    return childOf(kid, { title: cache.title, model: cache.model, touchedAt: cache.touchedAt, open }, now)
+  }))
+  if (JSON.stringify(await read($, childSessions)) !== JSON.stringify(rows)) await update($, childSessions, () => rows)
+}
+
+/** A transcript's last 64 kB, or the whole file where `tail` cannot run. */
+async function transcriptTail($: $, file: string): Promise<string> {
+  const ran = await $.process.run(['tail', '-c', '65536', file], { timeoutMs: 5000 }).catch(() => undefined)
+  return ran?.exitCode === 0 ? ran.stdout : await $.fs.read(file).catch(() => '')
+}
+
+/** Shows a child session in the main window, as a Caches row's double click does (issues 62, 129). */
+async function openChildSession($: $, local: string): Promise<void> {
+  const link = sessionLink(local)
+  const ran = link === null ? undefined : await $.process.run(['open', link], { timeoutMs: 5000 }).catch(() => undefined)
+  if (ran?.exitCode !== 0) $.ui.toast('The desktop did not open that session.')
 }
 
 // Keep warm (issue #60). Each session's mod pings only its own session, so arming another from the
@@ -776,6 +787,21 @@ async function changeWarmth($: $, sessionId: string, change: (w: Warmth) => Warm
 async function toggleWarmth($: $, sessionId: string): Promise<void> {
   const now = await $.clock.now()
   await changeWarmth($, sessionId, w => toggled(w, now))
+}
+
+/**
+ * The desktop restarted at this session's own ask (scripts/desktop-restart.sh --resume): its note becomes
+ * the next prompt, so the work carries on without the person. The note goes first, so a reload cannot send it twice.
+ */
+async function resumeAfterRestart($: $): Promise<void> {
+  const path = resumePath((await $.env.get('HOME')) ?? '', await $.session.id())
+  if (!(await $.fs.exists(path))) return
+  const note = await $.fs.read(path)
+  await $.process.run(['rm', '-f', path], { timeoutMs: 5000 })
+  const text = resumePrompt(note)
+  if (text === null) return
+  const entered = await $.prompt.submit({ text }).catch(() => null)
+  if (entered === null || entered.drop !== undefined) await $.fs.write(path, note)
 }
 
 /** Sets the timer for this session's next ping, or none. */
@@ -839,14 +865,6 @@ async function openCacheSession($: $, file: string): Promise<void> {
   if (link === null) return
   const ran = await $.process.run(['open', link], { timeoutMs: 5000 }).catch(() => undefined)
   if (ran?.exitCode !== 0) $.ui.toast('The desktop did not open that session.')
-}
-
-async function openReady($: $): Promise<void> {
-  if (!(await readReady($)) && (await read($, ready)) === null) {
-    $.ui.toast('Could not read the issues ready for an agent; gh may be signed out or offline.')
-    return
-  }
-  await $.ui.open({ id: READY_PANE, title: 'Ready for agent', focus: true })
 }
 
 /** The count the you row is showing, or null while that count is still unknown. */
@@ -1445,22 +1463,65 @@ function picturesFor(request: Request, item: Item | undefined): Picture[] {
   return all.filter((one, i) => all.findIndex(other => other.url === one.url) === i)
 }
 
-/** One picture as the card holds it, starting its fetch the first time it is asked for. */
-function pictureOf($: $, url: string, root: string): Loaded | 'failed' | 'pending' {
-  const held = pictures.get(url)
+/** One picture's size, starting its fetch the first time it is asked for (#136). */
+function pictureSize($: $, url: string, root: string): { file: string; width: number; height: number } | 'failed' | 'pending' {
+  const held = pictureSizes.get(url)
   if (held !== undefined) return held
   const fetch = fetchOf(url, root)
   if (fetch === null) {
-    pictures.set(url, 'failed')
+    pictureSizes.set(url, 'failed')
     return 'failed'
   }
-  pictures.set(url, 'pending')
+  pictureSizes.set(url, 'pending')
   void $.process
-    .run(['/bin/sh', '-c', FETCH_SCRIPT, 'sh', nameOf(url), ...fetchArgs(fetch)], { timeoutMs: 45_000 })
+    .run(['/bin/sh', '-c', FETCH_SCRIPT, 'sh', nameOf(url), ...fetchArgs(fetch, SIZE)], { timeoutMs: 45_000 })
+    .then(ran => (ran.exitCode === 0 ? sizeOf(ran.stdout) : null))
+    .catch(() => null)
+    .then(size => {
+      pictureSizes.set(url, size ?? 'failed')
+      $.ui.invalidate('ui.render')
+    })
+  return 'pending'
+}
+
+/** One strip of a picture as the card holds it, starting its fetch the first time it is asked for. */
+function pictureOf($: $, url: string, root: string, page: Strip): Loaded | 'failed' | 'pending' {
+  const key = `${url}@${page.top}-${page.rows}-${page.most}`
+  const held = pictures.get(key)
+  if (held !== undefined) return held
+  const fetch = fetchOf(url, root)
+  if (fetch === null) {
+    pictures.set(key, 'failed')
+    return 'failed'
+  }
+  pictures.set(key, 'pending')
+  void $.process
+    .run(['/bin/sh', '-c', FETCH_SCRIPT, 'sh', nameOf(url), ...fetchArgs(fetch, page)], { timeoutMs: 45_000 })
     .then(ran => (ran.exitCode === 0 ? loadedOf(ran.stdout) : null))
     .catch(() => null)
     .then(loaded => {
-      pictures.set(url, loaded ?? 'failed')
+      pictures.set(key, loaded ?? 'failed')
+      $.ui.invalidate('ui.render')
+    })
+  return 'pending'
+}
+
+/** One video as the card holds it, starting its fetch the first time it is asked for (#132). */
+function videoState($: $, url: string, root: string): Video | 'failed' | 'pending' | 'image' {
+  const held = videos.get(url)
+  if (held !== undefined) return held
+  const fetch = fetchOf(url, root)
+  if (fetch === null || fetch.kind === 'contents') {
+    videos.set(url, 'failed')
+    return 'failed'
+  }
+  videos.set(url, 'pending')
+  void $.process
+    .run(['/bin/sh', '-c', VIDEO_SCRIPT, 'sh', nameOf(url), fetch.kind, fetch.kind === 'file' ? fetch.path : fetch.url], { timeoutMs: 150_000 })
+    .then(ran => (ran.exitCode === 0 ? videoOf(ran.stdout) : ran.exitCode === NOT_A_FILM ? 'image' as const : null))
+    .catch(() => null)
+    .then(video => {
+      videos.set(url, video ?? 'failed')
       $.ui.invalidate('ui.render')
     })
   return 'pending'
@@ -1673,7 +1734,7 @@ async function remember($: $, entry: HumanQueueUndo): Promise<void> {
 }
 
 /** Sets one item's ruling, a verdict, a comment or both, keeping what is not given. */
-async function writeRuling($: $, target: Target, change: { verdict?: 'yes' | 'no'; comment?: string | null }): Promise<boolean> {
+async function writeRuling($: $, target: Target, change: { verdict?: Verdict; comment?: string | null }): Promise<boolean> {
   let before: string | null = null
   let after: string | null = null
   let heading = target.heading ?? ''
@@ -1681,7 +1742,7 @@ async function writeRuling($: $, target: Target, change: { verdict?: 'yes' | 'no
     before = rulingLineOf(body, id, target.item, target.heading)
     const found = findItem(findRequest(parse(body), id)!, target.item, target.heading)
     heading = found?.heading ?? heading
-    const was = before === null ? { verdict: null, comment: null } : parseRuling(before.replace(/^ruling:\s*/i, ''))
+    const was = before === null ? { verdict: null, comment: null } : parseRuling(before.replace(/^ruling:\s*/i, ''), found?.kind)
     const next = setRuling(
       body,
       id,
@@ -1720,9 +1781,15 @@ async function saveComment($: $, target: Target, value: string): Promise<boolean
   return writeRuling($, target, { comment })
 }
 
-async function rule($: $, verdict: 'yes' | 'no'): Promise<void> {
+async function rule($: $, verdict: Verdict): Promise<void> {
   const { request, item, index } = await current($)
   if (request === undefined) return
+  // A key for the other kind's answers (1 on a decision, W on a pair) does nothing but say which keys rule here.
+  if (item !== undefined && !VERDICTS[item.kind].includes(verdict)) {
+    $.ui.toast(item.kind === 'pair' ? 'This item is A, Same or B: X, C or V.' : 'This item is yes or no: W or S.')
+    return
+  }
+  if (item === undefined && verdict !== 'yes' && verdict !== 'no') return
   if (WAITS_FOR_R.has(await phaseOfRequest($, request))) {
     $.ui.toast(`${label(request)} is already submitted: R ${verdict === 'yes' ? 'sends it' : 'sends it, or take it back'}.`)
     return
@@ -2213,21 +2280,23 @@ async function comment($: $, surface: RenderSurface): Promise<void> {
   $.ui.toast(`Say or type your comment in the message box. It attaches to ${where} and never reaches the agent.`)
 }
 
-type Action = 'yes' | 'no' | 'prev' | 'next' | 'comment' | 'undo' | 'redo' | 'submit'
+type Action = Verdict | 'prev' | 'next' | 'comment' | 'undo' | 'redo' | 'submit'
 
-/** The game keymap, shared by the pane's hotkeys and the desktop card. */
-const KEYS: Record<string, Action> = { w: 'yes', s: 'no', a: 'prev', d: 'next', q: 'undo', e: 'redo', r: 'submit' }
+/**
+ * The game keymap, shared by the pane's hotkeys and the desktop card. A is ◀, Z
+ * the plate and the digits pick a request, so a pair's A, Same and B are X, C and V (#125).
+ */
+const KEYS: Record<string, Action> = { w: 'yes', s: 'no', x: 'a', c: 'same', v: 'b', a: 'prev', d: 'next', q: 'undo', e: 'redo', r: 'submit' }
+
+const isVerdict = (action: Action): action is Verdict => action === 'yes' || action === 'no' || action === 'a' || action === 'b' || action === 'same'
 
 async function act($: $, action: Action, surface: RenderSurface, from: 'button' | 'card' = 'button'): Promise<void> {
   // A key on the focused card may also press the pane Button bound to it: act once.
   const now = await $.clock.now()
   if (action === lastAct.key && from !== lastAct.from && now - lastAct.at < REPEAT_GAP_MS) return
   lastAct = { key: action, at: now, from }
+  if (isVerdict(action)) return rule($, action)
   switch (action) {
-    case 'yes':
-      return rule($, 'yes')
-    case 'no':
-      return rule($, 'no')
     case 'prev':
       return step($, -1)
     case 'next':
@@ -2292,7 +2361,7 @@ async function pressNative($: $, action: Action, surface: RenderSurface, from: '
   if (action === 'undo' || action === 'redo' || action === 'comment') return act($, action, surface, from)
   if (!(await flushDraft($))) return
   await setCommentOpen($, false)
-  if (action === 'yes' || action === 'no') return rule($, action)
+  if (isVerdict(action)) return rule($, action)
   if (action === 'prev' || action === 'next') return step($, action === 'prev' ? -1 : 1)
   return saveAndMove($)
 }
@@ -2417,10 +2486,6 @@ async function fillStopped($: $, stage: string, detail = ''): Promise<void> {
   await $.store.set(DECK_FILLS_KEY, [...kept, { at: await $.clock.now(), stage, detail: detail.slice(0, 300) }]).catch(() => undefined)
 }
 
-/** The store key of each deck's picks, newest last, and how many it keeps (#109). */
-const DECK_PICKS_KEY = 'deckPicks'
-const DECK_PICKS_LOG = 200
-
 /** One Haiku call; null when it does not answer. */
 async function haiku($: $, system: string, prompt: string, maxTokens: number): Promise<string | null> {
   const r = await $.model.complete({ model: GATE_MODEL, system, prompt, maxTokens, timeoutMs: 30_000 })
@@ -2475,45 +2540,14 @@ async function fillDeck($: $, answer: string, wrap: WrapUpAsk | null, epoch: num
   // The row's buttons are the agent's own options: a deck that names others would answer a different question.
   const parsed = asked && wrap !== null ? asButtons(forked, wrap.actions) : forked
   if (parsed === null) return fillStopped($, 'options', JSON.stringify({ fork: forked.options, asked: wrap?.actions ?? [] }))
-  const cwd = (await $.session.cwd()).replace(/\/$/, '')
-  const absolute = (path: string) => (path.startsWith('/') ? path : `${cwd}/${path}`)
-  const read = async (path: string) => {
-    const text = await $.fs.read(path)
-    if (typeof text !== 'string') throw new Error('not text')
-    return text
-  }
-  const uses = (await $.session.messages().catch(() => [])).flatMap(message => (message.role === 'assistant' ? message.toolUses : []))
-  const touched = await checkTouches({ ...parsed, touches: parsed.touches?.map(paths => paths.map(touch => ({ ...touch, path: absolute(touch.path) }))) }, read)
-  const supported = touched
   if (epoch !== deckEpoch) return
-  // Paths in the session folder show relative to it.
-  const relative = (path: string) => (path.startsWith(`${cwd}/`) ? path.slice(cwd.length + 1) : path)
-  const shown = {
-    ...supported,
-    touches: supported.touches?.map(paths => paths.map(touch => ({ ...touch, path: relative(touch.path) }))),
-  }
-  // Each argument's fact, checked against the output of the call it came from (#110).
-  const argued = await checkArguments(argumentsOf(raw.arguments), uses.map(use => ({ tool: use.tool, input: use.input, text: typeof use.text === 'string' ? use.text : '' })),
-    path => read(absolute(path.replace(/^~(?=\/)/, ''))).catch(() => null))
-  if (argued.length > 0) Object.assign(shown, { arguments: argued })
-  if (shown.touches === undefined) delete shown.touches
+  const shown = parsed
   const sends = optionSends(shown.options, wrap)
   await update($, decision, () => ({ ...shown, sends }))
-  // Each deck's picks, kept so `scripts/deck-picks.mts` can say how many techniques the decks draw on (#109).
-  const logged = await $.store.get(DECK_PICKS_KEY).catch(() => null)
-  const kept = Array.isArray(logged) ? logged.slice(-(DECK_PICKS_LOG - 1)) : []
-  void $.store.set(DECK_PICKS_KEY, [...kept, { at: await $.clock.now(), picks: shown.picks ?? [] }]).catch(() => undefined)
-  // The fork's own picks beside the ones kept, and why a kept pick cannot draw, so a pick that fails shows in the log.
-  const refused = eligible(deckFacts(shown.facts) ?? {}, 'desktop').refused.filter(one => shown.picks?.includes(one.view)).map(one => `${one.view}: ${one.reason}`)
-  const backed = argued.filter(one => one.fact !== undefined).map(one => one.fact!.shape)
-  void fillStopped($, 'shown', `${(shown.picks ?? []).join(', ')} | fork: ${JSON.stringify(raw.picks ?? null).slice(0, 200)}${refused.length === 0 ? '' : ` | refused: ${refused.join('; ').slice(0, 300)}`} | arguments: ${argued.length}, facts: ${backed.join(', ') || 'none'}`)
-  // The deck's pictures are planned in the background, as a queue item's are, and drawn once the plan lands (#100).
-  const composed = composeDecision({ ...shown, facts: deckFacts(shown.facts) })
-  if (composed !== null) void planItems($, [composed]).catch(() => undefined)
+  await update($, deckPage, () => ({ tab: shown.recommend, ask: shown.ask }))
+  void fillStopped($, 'shown', `pages: ${(shown.pages ?? []).map(page => page?.diagrams.map(one => one.draw.shape).join(' ') ?? 'none').join(' | ')}`)
   const since = await $.clock.now()
   await update($, decisionCards, () => ({ tasks: [...cards], since }))
-  await update($, deckPage, () => ({ page: 0, source: null }))
-  await update($, deckQuote, () => null)
   // The recommended option waits in the empty prompt box as a dim suggestion, Tab to take.
   const recommended = sends[shown.recommend]
   if (recommended !== undefined) void $.prompt.suggest({ text: recommended }).catch(() => undefined)
@@ -2605,26 +2639,6 @@ const STEPS_OFF_KEY = 'stepsOffSessions'
 let renamesPlans = false
 /** The band's size as it last drew, for the show tool's reply to an agent staging a shot. */
 let bandSeen = { maxRows: 0, columns: 0 }
-
-/**
- * The sessions whose deck draws each argument over the tool output it rests on (#110), by `$.session.id()`: a gate,
- * so the owner sees it in one session's shot before it lands for every one.
- */
-const DECK_FACTS_KEY = 'deckFactsSessions'
-
-async function deckFactsSessions($: $): Promise<string[]> {
-  const held = await $.store.get(DECK_FACTS_KEY)
-  return Array.isArray(held) ? held.filter((id): id is string => typeof id === 'string') : []
-}
-
-/** Turns the deck's arguments on for this session, or back off, and says which. */
-async function toggleDeckFacts($: $): Promise<string> {
-  const id = await $.session.id()
-  const gated = await deckFactsSessions($)
-  const isOn = gated.includes(id)
-  await $.store.set(DECK_FACTS_KEY, isOn ? gated.filter(other => other !== id) : [...gated, id])
-  return isOn ? 'This session\'s deck draws its pictures again.' : 'This session\'s deck draws each argument over the tool output it rests on.'
-}
 
 async function stepsOffSessions($: $): Promise<string[]> {
   const held = await $.store.get(STEPS_OFF_KEY)
@@ -2752,8 +2766,11 @@ export const register: Register = (on, _options) => {
     // The subagents row starts closed, a reload included: the outline opens only on a press.
     await update($, subagentsOpen, () => false)
     await update($, subagentPick, () => null)
+    // Ready for agent became the Frontier's All repositories scope (issue 142): a tab a release before left open draws nothing, so it closes.
+    if ((await $.ui.panes().catch(() => [])).some(pane => pane.id === 'human-queue-ready')) await $.ui.close({ id: 'human-queue-ready' }).catch(() => undefined)
     watchSubagents($)
     $.clock.every(CARD_POLL_MS, () => void watchCards($).catch(() => undefined))
+    $.clock.after(RESUME_DELAY_MS, () => void resumeAfterRestart($).catch(() => undefined))
     await $.tool.register({
       name: 'review',
       description:
@@ -2815,14 +2832,13 @@ export const register: Register = (on, _options) => {
             'round. Use it to stage a pane for a screenshot; it changes nothing else. '
           : '') +
         '"steps" turns the band\'s ' +
-        'task list off for this session, leaving it to the app, or back on. "deck-facts" turns on, or off, the decision ' +
-        'deck that draws each argument over the tool output it rests on, for this session only. "tour" opens the tour: ' +
+        'task list off for this session, leaving it to the app, or back on. "tour" opens the tour: ' +
         'the setup this plugin needs and every feature, each with a button that runs it here. "banner" shows, or hides, the ' +
         'session banner above the band: this session\'s edited files and the ADR each answers to.',
       inputSchema: {
         type: 'object',
         properties: {
-          pane: { type: 'string', enum: [...(DEV_PANES ? ['palette', 'album', 'grading'] : []), 'steps', 'deck-facts', 'banner', 'tour'], description: 'Which pane to open, "steps" to turn the band\'s task list off or back on, "deck-facts" to turn the deck\'s arguments on or off, or "banner" to show or hide the session banner, for this session.' },
+          pane: { type: 'string', enum: [...(DEV_PANES ? ['palette', 'album', 'grading'] : []), 'steps', 'banner', 'tour'], description: 'Which pane to open, "steps" to turn the band\'s task list off or back on, or "banner" to show or hide the session banner, for this session.' },
           page: { type: 'string', description: 'The page to open at, by its key (e.g. "svg", "threshold"); omit for where it was left.' },
         },
         required: ['pane'],
@@ -2970,8 +2986,33 @@ export const register: Register = (on, _options) => {
     return result
   })
 
+  // The notification that a background task ended, however it reaches the main conversation.
+  on('session.append', async ($, e, next) => {
+    if (e.agentId === undefined && e.message.type === 'user') {
+      const ends = notified(JSON.stringify(e.message.content ?? ''))
+      if (ends.length > 0) {
+        const now = await $.clock.now()
+        await update($, backgrounds, rows => ended(rows, ends, now))
+      }
+    }
+    return next(e)
+  })
+
+  // The main loop's calls name the background tasks it starts (issue 126): a backgrounded call's record
+  // names its task, and a TaskStop ends one at once, before the notification that says so. A subagent's
+  // calls say what it is doing now.
   on('tool.call', async ($, e, next) => {
-    if (e.agentId === undefined) return next(e)
+    if (e.agentId === undefined) {
+      const result = await next(e)
+      if (result.deny !== undefined) return result
+      const input = e as unknown as Record<string, unknown>
+      const now = await $.clock.now()
+      const task = launched(e.tool, input, result.result, now)
+      const stopped = e.tool === 'TaskStop' ? [input.task_id, input.shell_id].find((v): v is string => typeof v === 'string') : undefined
+      if (task !== null) await update($, backgrounds, rows => [...rows.filter(b => b.id !== task.id), task])
+      if (stopped !== undefined) await update($, backgrounds, rows => ended(rows, [{ id: stopped, status: 'killed' }], now))
+      return result
+    }
     const id = e.agentId
     const now = await $.clock.now()
     await subagentFact($, id, now, m => ({ ...m, tool: e.tool, toolAt: now }))
@@ -3144,9 +3185,8 @@ export const register: Register = (on, _options) => {
     if (DEV_PANES && input.pane === 'grading') return { result: await openGrading($) }
     if (input.pane === 'tour') return { result: await openTour($) }
     if (input.pane === 'steps') return { result: await toggleSteps($) }
-    if (input.pane === 'deck-facts') return { result: await toggleDeckFacts($) }
     if (input.pane === 'banner') return { result: await toggleBanner($) }
-    return { result: `Not opened: pane is ${DEV_PANES ? '"palette", "album", "grading", ' : ''}"steps", "deck-facts", "banner" or "tour".` }
+    return { result: `Not opened: pane is ${DEV_PANES ? '"palette", "album", "grading", ' : ''}"steps", "banner" or "tour".` }
   })
 
   // The steps tool only forwards to the app's update_plan, which the app lists in the session's
@@ -3429,7 +3469,7 @@ export const register: Register = (on, _options) => {
             title: ticket.title,
             heading: `This session's ${ticket.kind}: ${shortKey(ticket.key)} ${ticket.title}`,
             body: ticket.gist,
-            action: { label: 'Open ticket', run: () => openTicket($, ticket.key) } as CardAction | null,
+            action: { label: 'Open issue', run: () => openTicket($, ticket.key) } as CardAction | null,
           }
         : declared !== null && branch.state !== 'ticket'
           ? {
@@ -3474,7 +3514,10 @@ export const register: Register = (on, _options) => {
     const chipWidth = Math.max(first === undefined ? 0 : askChip.length, work?.chip.length ?? 0)
     const fileAsks = open.filter(request => request.issue === undefined).length
     const place = first !== undefined ? mine.indexOf(first) + 1 : null
-    const readyText = agentPill(stage, ticket?.progress ?? null, observed.ready, now)
+    // The pill opens this project's frontier wherever the session is in a GitHub repository (issue 128),
+    // so it counts that frontier's ready items; elsewhere it counts and opens every repository's.
+    const projectReady = repoHere !== null && heldFrontier.state === 'read' && heldFrontier.repo.toLowerCase() === repoHere ? readyCount(heldFrontier.frontier) : null
+    const readyText = agentPill(stage, ticket?.progress ?? null, observed.ready, now, projectReady)
     const steady = youPill(place, mine.length, observed.waiting, now, fileAsks)
     const waitingNow = waitingTotal(observed.waiting, fileAsks)
     const seen = await read($, seenWaiting)
@@ -3602,19 +3645,106 @@ export const register: Register = (on, _options) => {
     const teamNow = Math.max(await read($, subagentNow), now)
     const teamOrder = ordered(team, teamMeta)
     const teamLive = team.filter(isLive)
-    const teamSignal = teamLive.length > 0 ? SIGNAL_BLUE : team.some(isFailed) ? SIGNAL_RED : null
+    // Background tasks share the row (issue 126): counted beside the subagents, listed under them.
+    const tasks = orderedTasks(await read($, backgrounds))
+    const tasksLive = tasks.filter(isRunning)
+    const tasksFailed = (b: Background) => b.status === 'failed' || b.status === 'killed'
+    // The sessions this one started share it too (issue 129), after the tasks; cleared idle ones stay hidden.
+    const cleared = await read($, childCleared)
+    const kids = orderedChildren(await read($, childSessions)).filter(c => isChildRunning(c) || !cleared.includes(c.local))
+    const kidsLive = kids.filter(isChildRunning)
+    const teamSignal = teamLive.length + tasksLive.length + kidsLive.length > 0 ? SIGNAL_BLUE : team.some(isFailed) || tasks.some(tasksFailed) ? SIGNAL_RED : null
+    const outlined = Math.min(team.length, ROOM + 1) + Math.min(tasks.length, ROOM + 1)
     const teamLead = teamLive.length > 0 ? teamOrder[0] : undefined
     const toggleTeam = () => update($, subagentsOpen, isOpen => !isOpen)
     const teamDot = (s: Subagent) => (isLive(s) ? SIGNAL_BLUE : isFailed(s) ? SIGNAL_RED : null)
-    const teamRows = team.length === 0 ? null : (
-      <Box key="hq-subagents" flexDirection="column" rowGap={teamOpen ? 1 : 0}>
+    // Each entry of the open outline: its line, and the detail a press on it shows. The shape says
+    // what it is (● a subagent, ■ a background task, ◆ a session this one started) and its fill
+    // how it stands, so the open row needs no counts (issue 131).
+    const mark = (shape: string, signal: string | null) =>
+      signal === null ? <Text dimColor>{shape}</Text> : <Text color={signal} bold>{shape}</Text>
+    const more = (key: string, n: number) => ({ key, line: <Text dimColor>{`+${n} earlier`}</Text>, detail: null })
+    const entries = [
+      ...teamOrder.slice(0, ROOM).map(s => {
+        const m = teamMeta[s.id]
+        const wait = waitingOn(m, teamNow)
+        const [facts, doing] = detail(s, m, teamNow)
+        return {
+          key: `subagent-${s.id}`,
+          indent: s.parentId === undefined ? 0 : 2,
+          line: [
+            mark(SUBAGENT_SHAPE, teamDot(s)),
+            <Button key={`subagent-pick-${s.id}`} label={s.description || s.type} plain onPress={() => update($, subagentPick, held => (held === s.id ? null : s.id))} />,
+            <Text dimColor>{rowFacts(s, m, teamNow)}</Text>,
+            wait === '' ? null : <Text color={SIGNAL_YELLOW}>{wait}</Text>,
+          ],
+          detail: teamPick !== s.id ? null : [<Text dimColor>{facts}</Text>, <Text dimColor>{doing}</Text>],
+        }
+      }),
+      ...(teamOrder.length > ROOM ? [more('subagents-more', teamOrder.length - ROOM)] : []),
+      ...tasks.slice(0, ROOM).map(b => ({
+        key: `task-${b.id}`,
+        line: [
+          mark(TASK_SHAPE, isRunning(b) ? SIGNAL_BLUE : tasksFailed(b) ? SIGNAL_RED : null),
+          <Button key={`task-pick-${b.id}`} label={taskLabel(b)} plain onPress={() => update($, subagentPick, held => (held === b.id ? null : b.id))} />,
+          <Text dimColor>{taskFacts(b, teamNow)}</Text>,
+        ],
+        detail: teamPick !== b.id ? null : [
+          <Text dimColor>{`background ${b.tool} · ${b.status} · ${b.id}`}</Text>,
+          taskLabel(b) === b.description ? null : <Text dimColor wrap="truncate-end">{b.description}</Text>,
+          b.command === undefined ? null : <Text dimColor wrap="truncate-end">{b.command.split('\n')[0]}</Text>,
+        ],
+      })),
+      ...(tasks.length > ROOM ? [more('tasks-more', tasks.length - ROOM)] : []),
+      ...kids.slice(0, ROOM).map(c => ({
+        key: `child-${c.local}`,
+        line: [
+          mark(SESSION_SHAPE, isChildRunning(c) ? SIGNAL_BLUE : null),
+          <Button key={`child-open-${c.local}`} label={shortTitle(c.title, 6, 32)} plain onPress={() => openChildSession($, c.local)} />,
+          <Text dimColor>{childFacts(c, teamNow)}</Text>,
+        ],
+        detail: null,
+      })),
+      ...(kids.length > ROOM ? [more('children-more', kids.length - ROOM)] : []),
+    ]
+    const entryLine = (entry: (typeof entries)[number]) => (
+      <Box key={`${entry.key}-line`} flexDirection="row" alignItems="center" columnGap={1} paddingLeft={'indent' in entry ? entry.indent : 0} flexShrink={1} minWidth={0}>
+        {entry.line}
+      </Box>
+    )
+    const entryDetail = (entry: (typeof entries)[number]) =>
+      entry.detail === null ? null : (
+        <Box key={`${entry.key}-detail`} flexDirection="column" paddingLeft={2}>
+          {entry.detail}
+        </Box>
+      )
+    const [firstEntry, ...restEntries] = entries
+    const clearFinished = (
+      <Button
+        key="subagents-clear"
+        label="clear finished"
+        plain
+        dimColor
+        onPress={() => update($, subagents, rows => rows.filter(isLive))
+          .then(() => update($, backgrounds, rows => rows.filter(isRunning)))
+          .then(() => update($, childCleared, held => [...new Set([...held, ...kids.filter(c => !isChildRunning(c)).map(c => c.local)])]))}
+      />
+    )
+    // The row's one action, lowest salience: grey, lowercase, only while open with something finished.
+    // Without it, the line stops where the pills column starts, so that column stays clear on every
+    // row (issue #41).
+    const teamRight = teamOpen && team.length + tasks.length + kids.length > teamLive.length + tasksLive.length + kidsLive.length
+      ? clearFinished
+      : <Box key="subagents-gutter" width={9} flexShrink={0} />
+    const teamRows = entries.length === 0 ? null : !teamOpen ? (
+      <Box key="hq-subagents" flexDirection="column">
         {row(
           'hq-subagents-row',
           [
             ...rowLabel('subagents-label', 'subagents', teamSignal),
             chipWidth === 0 ? null : <Box key="subagents-chip" width={chipWidth} flexShrink={0} />,
-            <Button key="open-subagents" label={teamCounts(team)} plain onPress={toggleTeam} />,
-            teamOpen || teamLead === undefined ? null : (
+            <Button key="open-subagents" label={teamCounts([...team, ...tasks.map(b => ({ ...b, type: b.tool })), ...kids.map(c => ({ id: c.local, description: c.title, type: 'session', ...childCounted(c) }))])} plain onPress={toggleTeam} />,
+            teamLead === undefined ? null : (
               <Box key="subagents-lead" flexShrink={1} minWidth={0}>
                 <Text dimColor wrap="truncate-end">
                   {`${teamLead.description} · ${modelOf(teamLead, teamMeta[teamLead.id])} · ${elapsed(teamMeta[teamLead.id], teamNow)}`}
@@ -3622,43 +3752,27 @@ export const register: Register = (on, _options) => {
               </Box>
             ),
           ],
-          // The row's one action, lowest salience: grey, lowercase, only while open with something finished.
-          // Without it, the line stops where the pills column starts, so that column stays clear on every
-          // row (issue #41).
-          teamOpen && team.length > teamLive.length ? (
-            <Button key="subagents-clear" label="clear finished" plain dimColor onPress={() => update($, subagents, rows => rows.filter(isLive))} />
-          ) : (
-            <Box key="subagents-gutter" width={9} flexShrink={0} />
-          ),
+          teamRight,
         )}
-        {!teamOpen ? null : (
-          // An outline: each subagent's dot under the row's dot, its description under the titles.
-          <Box key="hq-subagents-outline" flexDirection="column" paddingLeft={labelWidth + 1}>
-            {teamOrder.slice(0, ROOM).map(s => {
-              const m = teamMeta[s.id]
-              const signal = teamDot(s)
-              const wait = waitingOn(m, teamNow)
-              const [facts, doing] = detail(s, m, teamNow)
-              return (
-                <Box key={`subagent-${s.id}`} flexDirection="column">
-                  <Box flexDirection="row" alignItems="center" columnGap={1} paddingLeft={s.parentId === undefined ? 0 : 2}>
-                    {signal === null ? <Text dimColor>●</Text> : <Text color={signal} bold>●</Text>}
-                    <Button key={`subagent-pick-${s.id}`} label={s.description || s.type} plain onPress={() => update($, subagentPick, held => (held === s.id ? null : s.id))} />
-                    <Text dimColor>{rowFacts(s, m, teamNow)}</Text>
-                    {wait === '' ? null : <Text color={SIGNAL_YELLOW}>{wait}</Text>}
-                  </Box>
-                  {teamPick !== s.id ? null : (
-                    <Box flexDirection="column" paddingLeft={2}>
-                      <Text dimColor>{facts}</Text>
-                      <Text dimColor>{doing}</Text>
-                    </Box>
-                  )}
-                </Box>
-              )
-            })}
-            {teamOrder.length > ROOM ? <Box paddingLeft={2}><Text dimColor>{`+${teamOrder.length - ROOM} earlier`}</Text></Box> : null}
-          </Box>
+      </Box>
+    ) : (
+      // Open: no counts, since every entry's shape and fill say it. The first entry takes the row's
+      // line beside the label, which a press folds the outline back to (issue 131).
+      <Box key="hq-subagents" flexDirection="column">
+        {row(
+          'hq-subagents-row',
+          [
+            <Box key="subagents-label" width={labelWidth} flexShrink={0}>
+              <Button key="close-subagents" label="subagents" plain dimColor onPress={toggleTeam} />
+            </Box>,
+            firstEntry === undefined ? null : entryLine(firstEntry),
+          ],
+          teamRight,
         )}
+        <Box key="hq-subagents-outline" flexDirection="column" paddingLeft={labelWidth + 1}>
+          {firstEntry === undefined ? null : entryDetail(firstEntry)}
+          {restEntries.map(entry => [entryLine(entry), entryDetail(entry)])}
+        </Box>
       </Box>
     )
     // The rows the agent card shares the band with (issue 104): the agent and you rows, the subagents
@@ -3666,8 +3780,8 @@ export const register: Register = (on, _options) => {
     bandSeen = { maxRows: e.props.maxRows, columns: e.props.bodyColumns }
     // The card's first line, cut at a word to what its Open task and Close leave of the band's columns.
     const firstLine = Math.max(8, Math.floor((e.props.bodyColumns - 6 - 2 * (PILL_CELLS + 1) - Math.ceil('Open task Close'.length / perCell)) * perCell) - 1)
-    const pillRows = 2 + (team.length === 0 ? 0 : 1) + (showing === null ? 0 : 1)
-    const textLines = (teamOpen ? Math.min(team.length, ROOM + 1) : 0) + (showing === null ? 0 : showing.options.length)
+    const pillRows = 2 + (team.length + tasks.length === 0 ? 0 : 1) + (showing === null ? 0 : 1)
+    const textLines = (teamOpen ? outlined : 0) + (showing === null ? 0 : showing.options.length)
     // The strip draws at its own height above everything, and the band scrolls to hold it: the owner
     // found a strip cut to the band's spare rows too scrunched and accepted the scroll (issue 119).
     const stripWidth = bannerWidth(e.props.bodyColumns)
@@ -3681,7 +3795,7 @@ export const register: Register = (on, _options) => {
     const bandRows: BandRow[] = [
       ...(showing === null ? [] : ['pill' as const, ...showing.options.map(() => 'text' as const)]),
       'pill',
-      ...(team.length === 0 ? [] : ['pill' as const, ...Array.from({ length: teamOpen ? Math.min(team.length, ROOM + 1) : 0 }, () => 'text' as const)]),
+      ...(team.length + tasks.length === 0 ? [] : ['pill' as const, ...Array.from({ length: teamOpen ? outlined : 0 }, () => 'text' as const)]),
       'pill',
     ]
     const strip = edited.length > 0 && (await read($, bannerOn)) ? banner(edited, await read($, bannerAdrs), heldPlaced, stripWidth, cardOpen ? null : { maxRows: e.props.maxRows, rows: bandRows }) : null
@@ -3747,7 +3861,7 @@ export const register: Register = (on, _options) => {
           // The owner picked the book over a word, so the top row keeps its width; no monochrome book
           // draws on the desktop.
           [
-            <Button key="open-ready" label={readyText} variant="secondary" onPress={() => openReady($)} />,
+            <Button key="open-ready" label={readyText} variant="secondary" onPress={() => openFrontier($, repoHere !== null ? 'here' : 'all')} />,
             edited.length > 0 ? <Button key="open-banner" label="👁️" variant="secondary" onPress={() => toggleBanner($).then(() => undefined)} /> : null,
             showsBook ? <Button key="open-reader" label="📖" variant="secondary" onPress={openReader} /> : null,
           ],
@@ -3769,29 +3883,142 @@ export const register: Register = (on, _options) => {
     )
   })
 
-  // The frontier behind the agent row's "next" (issue 16): every group the frontier
-  // read holds, each entry one press from its ticket, and the source it came from.
+  // The Frontier (issues 115 and 142), behind the agent row's ready pill and its "next", in one of two
+  // scopes. This repository: every open issue, waiting on you, blocked and next listed, the rest counted.
+  // All repositories: every repository's asks and ready work, from the reads the band already makes.
   on('ui.render', { component: 'Pane', requestId: FRONTIER_PANE }, async ($, e) => {
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const elements = $.ui.resolve(e)
+    const { Box, Button, Text } = elements
+    const Svg = e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : undefined
+    const repoHere = await read($, here)
+    const scope = repoHere === null ? 'all' : await read($, frontierScope)
+    // The scope switch is the deck's tabs: the shown scope's label white over a 2pt white bar, the other grey
+    // over none. Outside a repository there is one scope, and no switch.
+    const tab = (key: 'here' | 'all', label: string) => {
+      const width = Math.ceil(sfWidth(label, 13) * 1.02 + 16)
+      const isOn = scope === key
+      return (
+        <Box key={`frontier-scopecol-${key}`} flexDirection="column">
+          <Button key={`frontier-scope-${key}`} plain label={label} {...(isOn ? {} : { dimColor: true })}
+            onPress={() => void openFrontier($, key)} />
+          {Svg === undefined ? null : (
+            <Box key={`frontier-scopebar-${key}`}>
+              <Svg source={`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="2"><rect width="${width}" height="2" fill="${isOn ? TEXT : GROUND}"/></svg>`}
+                width={width} height={2} alt={isOn ? `${label}, selected` : label} />
+            </Box>
+          )}
+        </Box>
+      )
+    }
+    const switcher = repoHere === null ? null : (
+      <Box key="frontier-head" flexDirection="row" columnGap={2}>
+        {tab('here', 'This repository')}
+        {tab('all', 'All repositories')}
+      </Box>
+    )
+    // A number column as wide as the widest number, so every title starts at one edge.
+    const columnOf = (numbers: number[]) => Math.max(0, ...numbers.map(n => String(n).length)) + 2
+    const row = (key: string, number: number, title: string, open: string, width: number) => (
+      <Box key={`frontier-row-${key}`} flexDirection="row" alignItems="center">
+        <Box width={width} flexShrink={0}>
+          <Text dimColor>#{number}</Text>
+        </Box>
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Button key={`frontier-${key}`} label={title} plain onPress={() => openTicket($, open)} />
+        </Box>
+      </Box>
+    )
+    const heading = (key: string, name: string, count: number, color?: string, dim = false) => (
+      <Box flexDirection="row" columnGap={1}>
+        <Text key={`frontier-${key}-name`} bold {...(color !== undefined ? { color } : dim ? { dimColor: true } : {})}>{name}</Text>
+        <Text dimColor>{count}</Text>
+      </Box>
+    )
+    if (scope === 'all') {
+      const list = await read($, ready)
+      const keyed = (key: string) => { const at = key.lastIndexOf('#'); return { repo: key.slice(0, at), number: Number(key.slice(at + 1)) } }
+      const asking = Object.values(await read($, asks)).filter(a => a.doneAt === null)
+        .map(a => ({ key: a.issue.key, title: a.issue.title, createdAt: a.issue.createdAt ?? '', ...keyed(a.issue.key) }))
+      const sections = [
+        { key: 'waiting', name: 'Waiting on you', color: SIGNAL_YELLOW, items: asking },
+        { key: 'ready', name: 'Ready for an agent', color: SIGNAL_BLUE, items: list ?? [] },
+      ].filter(g => g.items.length > 0)
+      const width = columnOf(sections.flatMap(g => g.items.map(i => i.number)))
+      // Within a scope's group, each repository is a dim line over its issues, oldest first.
+      const byRepo = (items: typeof asking) => {
+        const groups = new Map<string, typeof asking>()
+        for (const one of [...items].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))) groups.set(one.repo, [...(groups.get(one.repo) ?? []), one])
+        return [...groups]
+      }
+      return (
+        <Box flexDirection="column" rowGap={2}>
+          {switcher}
+          {list === null ? <Text dimColor>Reading every repository's issues…</Text> : null}
+          {list !== null && sections.length === 0 ? <Text>Nothing waits on you, and nothing is ready for an agent.</Text> : null}
+          {sections.map(g => (
+            <Box key={`frontier-${g.key}`} flexDirection="column" rowGap={1}>
+              {heading(g.key, g.name, g.items.length, g.color)}
+              {byRepo(g.items).map(([repo, items]) => (
+                <Box key={`frontier-${g.key}-${repo}`} flexDirection="column">
+                  <Text dimColor>{repo.split('/')[1] ?? repo}</Text>
+                  {items.map(one => row(`${g.key}-${one.key}`, one.number, one.title, one.key, width))}
+                </Box>
+              ))}
+            </Box>
+          ))}
+        </Box>
+      )
+    }
     const held = await read($, frontier)
-    if (held.state === 'unknown') return <Text dimColor>Reading this project's frontier…</Text>
-    if (held.state === 'failed') return <Text color="error">Could not read the frontier: {held.reason}</Text>
-    const f = held.frontier
-    const groups = GROUPS.filter(g => f[g.key].length > 0)
+    if (held.state === 'unknown') return <Box flexDirection="column" rowGap={1}>{switcher}<Text dimColor>Reading this repository's frontier…</Text></Box>
+    if (held.state === 'failed') {
+      return (
+        <Box flexDirection="column" rowGap={1}>
+          {switcher}
+          <Text color="error">Could not read the frontier: {held.reason}</Text>
+        </Box>
+      )
+    }
+    const { waiting, blocked, next, rest } = viewOf(held.frontier)
+    const showRest = await read($, frontierRest)
+    const counts = FRONTIER_STATES.map(s => ({ ...s, items: rest.filter(i => i.state === s.state) })).filter(s => s.items.length > 0)
+    type Group = { key: string; name: string; items: FrontierItem[] }
+    const groups = (list: Group[]) => list.filter(g => g.items.length > 0)
+    const main = groups([
+      { key: 'waiting', name: 'Waiting on you', items: waiting },
+      { key: 'blocked', name: 'Blocked', items: blocked },
+      { key: 'next', name: 'Next', items: next },
+    ])
+    const more = showRest ? groups(counts.map(s => ({ key: s.state, name: s.name[0]!.toUpperCase() + s.name.slice(1), items: s.items }))) : []
+    // Each heading takes the band's signal: amber on an ask, gold on landed work to accept,
+    // red on what is stuck, blue on the agent's work, dim on what is parked, white on the rest.
+    const signalOf: Record<string, string> = { waiting: SIGNAL_YELLOW, accepting: SIGNAL_GOLD, blocked: SIGNAL_RED, next: SIGNAL_BLUE, active: SIGNAL_BLUE, ready: SIGNAL_BLUE }
+    const numberWidth = columnOf(held.frontier.items.map(item => item.number))
+    const group = (g: Group) => (
+      <Box key={`frontier-${g.key}`} flexDirection="column" rowGap={1}>
+        {heading(g.key, g.name, g.items.length, signalOf[g.key], g.key === 'parked')}
+        <Box flexDirection="column">{g.items.map(item => row(`${g.key}-${item.number}`, item.number, item.title, `${held.repo}#${item.number}`, numberWidth))}</Box>
+      </Box>
+    )
+    const tally = counts.map(s => `${s.items.length} ${s.name}`).join(', ')
+    // The toggle keeps its place above what it opens, in the title column, so a press never moves it.
+    const toggle = rest.length === 0 ? null : (
+      <Box key="frontier-rest" flexDirection="row">
+        <Box width={numberWidth} flexShrink={0} />
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Button key="frontier-rest-toggle" plain dimColor
+            label={showRest ? 'Show less' : `${rest.length} more: ${tally}`}
+            onPress={() => void update($, frontierRest, open => !open)} />
+        </Box>
+      </Box>
+    )
     return (
-      <Box flexDirection="column" rowGap={1}>
-        <Text dimColor>
-          {f.source === 'script' ? `spec-frontier.mjs, spec #${f.spec}` : `${held.repo}'s labels`}
-        </Text>
-        {groups.length === 0 ? <Text>Nothing is on the frontier: no issue here is ready, waiting, claimed, blocked or paused.</Text> : null}
-        {groups.map(g => (
-          <Box key={`frontier-${g.key}`} flexDirection="column">
-            <Text dimColor>{g.name}</Text>
-            {f[g.key].map(item => (
-              <Button key={`frontier-${g.key}-${item.number}`} label={`#${item.number} ${item.title}`} plain onPress={() => openTicket($, `${held.repo}#${item.number}`)} />
-            ))}
-          </Box>
-        ))}
+      <Box flexDirection="column" rowGap={2}>
+        {switcher}
+        {held.frontier.items.length === 0 ? <Text>No open issues here.</Text> : null}
+        {main.map(group)}
+        {toggle}
+        {more.map(group)}
       </Box>
     )
   })
@@ -3920,44 +4147,6 @@ export const register: Register = (on, _options) => {
     )
   })
 
-  // The agent's zoom-out: every issue ready for an agent, grouped by repo, each
-  // one press from its Ticket pane.
-  on('ui.render', { component: 'Pane', requestId: READY_PANE }, async ($, e) => {
-    const { Box, Button, Text } = $.ui.resolve(e)
-    const list = await read($, ready)
-    if (list === null) return <Text dimColor>Reading the issues ready for an agent…</Text>
-    if (list.length === 0) return <Text color="success">Nothing is labelled {AGENT_LABEL}.</Text>
-    const groups = new Map<string, typeof list>()
-    for (const one of list) groups.set(one.repo, [...(groups.get(one.repo) ?? []), one])
-    // A number column as wide as the widest number, so every title starts at one edge.
-    const numberWidth = Math.max(...list.map(one => String(one.number).length)) + 2
-    return (
-      <Box flexDirection="column" rowGap={2}>
-        {[...groups].map(([repo, issues]) => (
-          <Box key={`ready-${repo}`} flexDirection="column" rowGap={1}>
-            <Box flexDirection="row" columnGap={1}>
-              <Text bold color="suggestion">
-                {repo.split('/')[1] ?? repo}
-              </Text>
-              <Text dimColor>{issues.length}</Text>
-            </Box>
-            <Box flexDirection="column">
-              {issues.map(one => (
-                <Box key={`ready-row-${one.key}`} flexDirection="row" alignItems="center">
-                  <Box width={numberWidth} flexShrink={0}>
-                    <Text dimColor>#{one.number}</Text>
-                  </Box>
-                  <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                    <Button key={`ready-${one.key}`} label={one.title} plain onPress={() => openTicket($, one.key)} />
-                  </Box>
-                </Box>
-              ))}
-            </Box>
-          </Box>
-        ))}
-      </Box>
-    )
-  })
 
   // The footer's cache label (issue #50): a pill with every warm cache's count, which opens the pane,
   // then this session's cache with the minutes in its state's colour. The footer draws text runs and
@@ -4184,8 +4373,8 @@ export const register: Register = (on, _options) => {
     )
   })
 
-  // The decision deck the reply row opens: one page that scrolls, every part of the call composed from the
-  // catalog on it (the owner, 2026-10-24: no Comparison or Sources tab holds a part apart). Tickets keep a tab.
+  // The decision deck the reply row opens (#134): a tab per option, the recommended one first to show, each one page
+  // that fits the pane: what the option is, the diagrams that make its case, then Choose this. Tickets keep a tab.
   on('ui.render', { component: 'Pane', requestId: DECISION_PANE }, async ($, e) => {
     const elements = $.ui.resolve(e)
     const { Box, Button, Markdown, Text } = elements
@@ -4193,146 +4382,129 @@ export const register: Register = (on, _options) => {
     const held = await read($, decision)
     if (held === null) return <Text dimColor>No decision is open.</Text>
     const at = await read($, deckPage)
-    const cwd = await $.session.cwd()
     const replied = await read($, replyTickets)
     const cards = await read($, ticketStates)
     const openRows = await read($, ticketOpen)
-    const fileOf = fileUrl(cwd)
     const newProps = takesNewProps(await engineBase($))
-    // An argument's chip opens the lines its call printed under its claim (#110).
-    const openQuote = await read($, deckQuote)
-    const md = (key: string, text: string, dim = false) => <Markdown key={key} text={text} dimColor={dim} />
-    type Block = { node: RenderChildren }
-    const recommended = held.options[held.recommend]!
-    const alternatives = held.options.filter((_, o) => o !== held.recommend)
-    // A deck column is about 7.9pt wide (docs/palette.md), so the snapshot fits the pane it is drawn in, or stays out.
-    const shot = Svg === undefined ? null : snapshot(held, Math.min(420, e.props.bodyColumns * 7.8))
-    // The engine keeps no key on an Svg, so a Box carries it.
-    const shotBlock: Block | null = shot === null || Svg === undefined ? null : { node: (
-      <Box key="deck-snapshot">
-        <Svg source={shot.svg} width={shot.width} height={shot.height}
-          alt="The call at the centre, its options around it, and the ADRs and code areas each option touches" />
+    // The page's pictures fill the pane's body at its column measure, drawn 1:1.
+    const room = Math.round(e.props.bodyColumns * DECK_COLUMN_PT)
+    const rule = room + Math.round(2 * DECK_COLUMN_PT)
+    const tabs = [...held.options, ...(replied.length === 0 ? [] : ['Issues'])]
+    // A tab picked on another question gives way: each decision opens on its recommendation.
+    const shown = at.ask === held.ask && at.tab < tabs.length ? at.tab : held.recommend
+    const pick = (tab: number) => () => update($, deckPage, () => ({ tab, ask: held.ask }))
+    // The selected tab's label is white over a white bar; the others grey with none. The recommended option keeps its
+    // green dot. Tabs that would not fit one row stack, and the bar moves to the selected one's left edge, where an
+    // underline between two stacked labels read as a divider (the design review of #134).
+    const tabWidth = (label: string, i: number) => Math.ceil(sfWidth(label, 13) * 1.02 + (i < held.options.length ? 32 : 16))
+    const stacked = tabs.reduce((sum, label, i) => sum + tabWidth(label, i), 0) + (tabs.length - 1) * 2 * DECK_COLUMN_PT > room
+    const bar = (key: string, width: number, height: number, isOn: boolean, alt: string) =>
+      Svg === undefined ? null : (
+        <Box key={key}>
+          <Svg source={`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="${width}" height="${height}" fill="${isOn ? TEXT : GROUND}"/></svg>`}
+            width={width} height={height} alt={alt} />
+        </Box>
+      )
+    const tabRow = (
+      <Box key="deck-tabs" flexDirection="column">
+        <Box key="deck-tab-row" flexDirection={stacked ? 'column' : 'row'} columnGap={2}>
+          {tabs.map((label, i) => {
+            const isOption = i < held.options.length
+            const id = isOption ? String(i) : label
+            const alt = i === shown ? `${label}, selected` : label
+            const named = (
+              <Box key={`deck-tablabel-${id}`} flexDirection="row" columnGap={1} alignItems="center">
+                {stacked ? bar(`deck-tabbar-${id}`, 2, 18, i === shown, alt) : null}
+                {!isOption ? null : i === held.recommend ? <Text color={RECOMMENDED}>●</Text> : <Text dimColor>●</Text>}
+                <Button key={`deck-tab-${id}`} plain label={label} {...(i === shown ? {} : { dimColor: true })} onPress={pick(i)} />
+              </Box>
+            )
+            return (
+              <Box key={`deck-tabcol-${id}`} flexDirection="column">
+                {named}
+                {stacked ? null : bar(`deck-tabbar-${id}`, tabWidth(label, i), 2, i === shown, alt)}
+              </Box>
+            )
+          })}
+        </Box>
+        {Svg === undefined ? null : (
+          // A pane's Svg takes pixels only, and `room` falls a few short of the tiles' edge: drawn a column wider, clipped to it.
+          <Box key="deck-tab-rule" width="100%" overflow="hidden">
+            <Svg source={`<svg xmlns="http://www.w3.org/2000/svg" width="${rule}" height="1"><rect width="${rule}" height="1" fill="${REST_LINE}"/></svg>`}
+              width={rule} height={1} alt="The tabs' rule" />
+          </Box>
+        )}
       </Box>
-    ) }
-    // The composer's page of the call (#100, #102): its facts, as tiles.
-    const composedItem = Svg === undefined ? null : composeDecision({ ...held, facts: deckFacts(held.facts) })
-    const pictureBlocks: Block[] = composedItem === null || Svg === undefined ? [] : deckPictures(
-      { Box, Text, Button, Svg, Link: elements.Link, Markdown },
-      {
-        plan: (await read($, plans))[composedItem.id] ?? planOf(composedItem, { failed: 'pending' }),
-        surface: e.surface === 'mobile' ? 'phone' : 'desktop',
-        facts: composedItem.facts,
-        question: held.ask,
-        room: cardWidth(e.props.bodyColumns),
-        newProps,
-        ...(held.picks === undefined ? {} : { picks: held.picks }),
-      },
-    ).map(one => ({ node: one.node }))
-    // Each argument of the call over the tool output it rests on (#110): its claim, a chip naming the call that opens
-    // the lines it printed, and its fact drawn as data. Gated per session until the owner rules on a shot.
-    const isFacts = (held.arguments?.length ?? 0) > 0 && await deckFactsSessions($).then(async ids => ids.includes(await $.session.id())).catch(() => false)
+    )
     const caption = newProps ? { size: 'caption' as const } : {}
-    const tabular = newProps ? { tabular: true } : {}
-    const mono = newProps ? { mono: true } : {}
-    const isNumber = (cell: string) => /^-?[$]?\d[\d,]*(\.\d+)?%?$/.test(cell.trim())
-    // A numbered line splits into its number, dim in its own column, and its text, which wraps under itself (#110's
-    // design review); only when every line prints a number, so a line of prose is never cut at a figure.
-    const numberedLines = (text: string, key: string) => {
-      const lines = text.split('\n')
-      const numbered = lines.map(numberedLine)
-      const isSplit = isNumbered(text)
-      // The indent every line shares is the file's, not the fact's: dropped, so a wrapped line hangs on its own text.
-      const bodies = lines.map((line, i) => (isSplit && numbered[i] !== null ? numbered[i]!.text : line))
-      const shared = Math.min(...bodies.filter(body => body.trim() !== '').map(body => /^\s*/.exec(body)![0].length))
+    const page = held.pages?.[shown] ?? null
+    // An option the fork wrote no page for shows how it compares instead, from its cells.
+    const compared: Diagram[] = page !== null || held.dimensions.length === 0 ? [] : [{
+      point: 'why', title: 'How it compares',
+      draw: { shape: 'lines', lines: held.dimensions.map((dimension, d) => ({ text: `${dimension} ${held.cells[d]?.[shown]?.value ?? ''}` })) },
+    }]
+    const what = page?.what ?? ''
+    const scale = workScale(held.pages ?? [])
+    const offered = page?.diagrams ?? compared
+    const fits = fitDiagrams(offered, room, paneHeight(e.props.scroll.bodyRows) - chromeHeight(held.headline, what, room, stacked ? tabs.length : 0), scale)
+    // `paired` draws the picture at half the page; `inRow` also sizes the tile to half its row (a column sizes it itself).
+    const tile = (one: Diagram, i: number, paired: boolean, inRow = paired) => {
+      const inner = pictureRoom(room, paired)
+      const picture = Svg === undefined ? null : diagramPicture(one.draw, inner, scale)
       return (
-        <Box key={key} flexDirection="column">
-          {lines.map((line, i) => (
-            // The number sits beside its line's first row, not between the rows a long line wraps to.
-            <Box key={`${key}-${i}`} flexDirection="row" columnGap={1} alignItems="flex-start">
-              {isSplit && numbered[i] !== null ? <Text dimColor {...mono} {...tabular} {...caption}>{numbered[i]!.number}</Text> : null}
-              <Text wrap="wrap" {...mono} {...caption}>{bodies[i]!.slice(Number.isFinite(shared) ? shared : 0)}</Text>
+        <Box key={`deck-diagram-${i}`} flexDirection="column" rowGap={1} borderStyle="round" borderColor={CARD_LINE} backgroundColor={FILL} paddingX={1}
+          {...(inRow ? { width: '50%', flexGrow: 1, flexShrink: 1 } : {})}>
+          <Text key="title" dimColor wrap="wrap">{one.title}</Text>
+          {picture !== null && Svg !== undefined ? (
+            <Box key="picture"><Svg source={picture.source} width={picture.width} height={picture.height} alt={picture.alt} /></Box>
+          ) : one.draw.shape === 'lines' ? (
+            <Box key="lines" flexDirection="column">
+              {one.draw.lines.map((line, l) => <Text key={`line-${l}`} wrap="wrap">{line.text}</Text>)}
             </Box>
-          ))}
+          ) : null}
+          {one.says === undefined ? null : <Text key="says" wrap="wrap">{one.says}</Text>}
+          {one.terms === undefined ? null : (
+            <Box key="terms" flexDirection="column">
+              {one.terms.map((term, n) => (
+                <Box key={`term-${n}`} flexDirection="row" columnGap={1} alignItems="flex-start">
+                  <Box flexShrink={0}><Text {...caption}>{term.term}</Text></Box>
+                  <Text dimColor wrap="wrap" {...caption}>{term.meaning}</Text>
+                </Box>
+              ))}
+            </Box>
+          )}
         </Box>
       )
     }
-    const factNode = (fact: HumanQueueFact, key: string): RenderChildren => {
-      if (fact.shape === 'bars') {
-        if (Svg === undefined) return null
-        // Bars keep half the card wherever their labels and values fit there, rather than spread across the pane (the deck's rules).
-        const room = cardWidth(e.props.bodyColumns) - 24
-        const bars = evidenceBars(fact, evidenceBarsWidth(fact) <= room / 2 ? room / 2 : room)
-        return <Svg source={bars.source} width={bars.width} height={bars.height} alt={bars.alt} />
-      }
-      if (fact.shape === 'table' || fact.shape === 'terms') {
-        // One column a Box, so each column's cells line up whatever their widths; a column of numbers lines up on its right.
-        const columns = fact.shape === 'table' ? fact.columns : ['', '']
-        const rows = fact.shape === 'table' ? fact.rows : fact.terms.map(one => [one.term, one.meaning])
-        return (
-          <Box key={key} flexDirection="row" columnGap={2}>
-            {columns.map((column, c) => {
-              const numeric = rows.every(row => isNumber(row[c]!))
-              return (
-                <Box key={`${key}-col-${c}`} flexDirection="column" flexShrink={c === columns.length - 1 ? 1 : 0} alignItems={numeric ? 'flex-end' : 'flex-start'}>
-                  {column === '' ? null : <Text dimColor {...caption}>{column}</Text>}
-                  {/* Every cell white, only the header dim, so the values a claim rests on are never the dimmest data (#110's design review); a term's meaning stays dim beside it. */}
-                  {rows.map((row, r) => <Text key={`${key}-${r}-${c}`} dimColor={fact.shape === 'terms' && c > 0} wrap="wrap" {...(numeric ? tabular : {})}>{row[c]}</Text>)}
-                </Box>
-              )
-            })}
+    // A wide page stacks two columns each on its own; a narrower one lays rows, two halves side by side.
+    const index = (one: Diagram) => fits.indexOf(one)
+    const diagramRows = room >= WIDE_ROOM
+      ? [(
+          <Box key="deck-columns" flexDirection="row" columnGap={1} alignItems="flex-start">
+            {columnsOf(fits, room, scale).map((column, c) => (
+              <Box key={`deck-column-${c}`} flexDirection="column" rowGap={1} width="50%" flexGrow={1} flexShrink={1}>
+                {column.map(one => tile(one, index(one), true, false))}
+              </Box>
+            ))}
           </Box>
-        )
-      }
-      return numberedLines(fact.lines, key)
-    }
-    const tile = (key: string, child: RenderChildren) => (
-      // As narrow as it draws whole: the frame hugs its table or lines rather than stretch across the pane.
-      <Box key={key} flexDirection="column" alignSelf="flex-start" borderStyle="round" borderColor={CARD_LINE} backgroundColor={FILL} paddingX={1}>
-        {child}
+        )]
+      : rowsOf(fits, room).map((row, r) => (
+          <Box key={`deck-row-${r}`} flexDirection="row" columnGap={1} alignItems="flex-start">
+            {row.map(one => tile(one, index(one), row.length === 2))}
+          </Box>
+        ))
+    // What gave way is said, so a narrow pane never hides that the page holds more.
+    const hidden = offered.length - fits.length
+    const more = hidden === 0 ? null : (
+      <Box key="deck-more"><Text dimColor {...caption}>{hidden === 1 ? '1 more diagram in a wider pane' : `${hidden} more diagrams in a wider pane`}</Text></Box>
+    )
+    const option = held.options[shown]
+    const choose = option === undefined ? null : (
+      <Box key="deck-choose-row" flexDirection="row">
+        <Button key="deck-choose" label={option}
+          onPress={() => (shown === 0 && held.grant !== undefined && allowedOnce.add(held.grant), clearDecision($)).then(() => $.prompt.submit({ text: held.sends?.[shown] ?? option, asUser: true })).then(() => undefined)} />
       </Box>
     )
-    const argumentBlocks: Block[] = (held.arguments ?? []).map((argument, i) => {
-      const which = `argument-${i}`
-      const href = `${fileOf(cwd)}#${which}`
-      const isOpen = openQuote === which && argument.output !== undefined
-      // A chip opens the call's lines only where they show more than the fact; else its name is plain, as a source that
-      // fails loses its chip (#108). The claim is body text, so its chip keeps the link's full blue (#110's design review).
-      const chip = argument.from === undefined ? '' : argument.output === undefined ? ` (${argument.from})` : ` ([${argument.from}](${href}))`
-      return { node: (
-        <Box key={`deck-${which}`} flexDirection="column" rowGap={1}>
-          <Markdown key={`deck-${which}-claim`} text={`${argument.claim.replace(/[.!?]$/, '')}${chip}.`}
-            pressableLinks={argument.output === undefined ? [] : [href]} onLinkPress={() => void update($, deckQuote, open => (open === which ? null : which))} />
-          {/* Opened, a fact of lines gives way to the output around it, so no line shows twice. */}
-          {isOpen ? tile(`deck-${which}-output`, numberedLines(argument.output!, `deck-${which}-out`)) : null}
-          {argument.fact === undefined || (isOpen && argument.fact.shape === 'lines') ? null : tile(`deck-${which}-tile`, factNode(argument.fact, `deck-${which}-fact`))}
-        </Box>
-      ) }
-    })
-    // The band's grammar (#107): the question, which is the first step a yes starts, then its options on dots, the
-    // recommended one first and green. Nothing under them says the call again: no reason, no why, no Do this next
-    // (the owner's ruling on #123: "The do this next is what I find myself reading").
-    const decisionBlocks: Block[] = [
-      { node: md('deck-question', `### ${held.headline}`) },
-      { node: (
-        <Box key="deck-options" flexDirection="column" paddingLeft={2}>
-          <Box key="deck-recommended" flexDirection="row" columnGap={1} alignItems="flex-start">
-            <Text color={RECOMMENDED}>●</Text>
-            <Text wrap="wrap">{recommended}</Text>
-          </Box>
-          {alternatives.map((option, i) => (
-            <Box key={`deck-alt-${i}`} flexDirection="row" columnGap={1}>
-              <Text dimColor>●</Text>
-              <Text dimColor wrap="wrap">{option}</Text>
-            </Box>
-          ))}
-        </Box>
-      ) },
-      ...(isFacts ? argumentBlocks : []),
-      // The call's snapshot (issue 81): its options over the ADRs and code areas they touch; then the evidence.
-      // The arguments are the call's evidence, so its snapshot and catalog pictures give way to them.
-      ...(isFacts || shotBlock === null ? [] : [shotBlock]),
-      ...(isFacts ? [] : pictureBlocks),
-    ]
     // The tickets the reply names: a closed row each; ▸ opens its state, parent, labels and outline, ▸ again closes it.
     const ticketNode = (ticket: HumanQueueReplyTicket, state: HumanQueueTicketState | undefined, isOpen: boolean) => (
       <Box key={`deck-ticket:${ticket.key}`} flexDirection="column">
@@ -4349,43 +4521,34 @@ export const register: Register = (on, _options) => {
         {isOpen && state !== undefined ? (
           <Box key={`deck-ticket-detail:${ticket.key}`} flexDirection="column" paddingLeft={4}>
             <Text dimColor wrap="wrap">{state.card?.detail ?? state.error ?? ''}</Text>
-            {(state.card?.points ?? []).map((point, at) => (
-              <Text key={`deck-ticket-point:${ticket.key}:${at}`} dimColor wrap="wrap">· {point}</Text>
+            {(state.card?.points ?? []).map((point, n) => (
+              <Text key={`deck-ticket-point:${ticket.key}:${n}`} dimColor wrap="wrap">· {point}</Text>
             ))}
           </Box>
         ) : null}
       </Box>
     )
-    const ticketBlocks: Block[] = replied.length === 0 ? [] : [
-      { node: md('deck-tickets-head', `### ${replied.length === 1 ? '1 ticket' : `${replied.length} tickets`}`) },
-      ...replied.map(ticket => {
-        const state = cards[ticket.key]
-        const isOpen = state !== undefined && openRows[ticket.key] === true
-        return { node: ticketNode(ticket, state, isOpen) }
-      }),
-    ]
-    // Each tab is one page that scrolls, never split into numbered pages (the owner, 2026-10-24).
-    const sections = [
-      { name: 'Decision', blocks: decisionBlocks },
-      { name: 'Tickets', blocks: ticketBlocks },
-    ].filter(section => section.blocks.length > 0)
-    const pages = sections.map(section => ({ section: section.name, blocks: section.blocks }))
-    const index = Math.max(0, Math.min(pages.length - 1, at.page))
-    const page = pages[index]!
-    const go = (i: number) => () => update($, deckPage, () => ({ page: Math.max(0, Math.min(pages.length - 1, i)), source: null }))
+    const body = shown >= held.options.length
+      ? replied.map(ticket => {
+          const state = cards[ticket.key]
+          return ticketNode(ticket, state, state !== undefined && openRows[ticket.key] === true)
+        })
+      : [
+          what === '' ? null : <Box key="deck-what"><Text wrap="wrap">{what}</Text></Box>,
+          ...diagramRows,
+          more,
+        ]
+    // The choose button sits at the pane's foot on every tab, so it never moves as the person compares (the design review of #134);
+    // it says the option it chooses (issue 140).
     return (
-      <Box flexDirection="column" rowGap={1}>
-        {/* A lone tab only repeats the pane's title: the row draws once there is a second to switch to (the owner, 2026-10-27). */}
-        {sections.length < 2 ? null : (
-          <Box key="deck-nav" flexDirection="row" columnGap={2} alignItems="center">
-            {sections.map(section =>
-              section.name === page.section
-                ? <Box key={`deck-tab-${section.name}`}><Text color="suggestion">{section.name}</Text></Box>
-                : <Button key={`deck-tab-${section.name}`} plain label={section.name} onPress={go(pages.findIndex(p => p.section === section.name))} />,
-            )}
-          </Box>
-        )}
-        <Box key={`deck-page-${index}`} flexDirection="column" rowGap={1}>{page.blocks.map(block => block.node)}</Box>
+      // A height of 100% drew as tall as the content; a minimum in rows, a line short of the pane's, holds the foot.
+      <Box flexDirection="column" rowGap={1} minHeight={Math.max(1, e.props.scroll.bodyRows - 2)} justifyContent="space-between">
+        <Box key="deck-top" flexDirection="column" rowGap={1}>
+          <Markdown key="deck-question" text={`### ${held.headline}`} />
+          {tabRow}
+          <Box key={`deck-page-${shown}`} flexDirection="column" rowGap={1}>{body}</Box>
+        </Box>
+        {shown >= held.options.length ? null : choose}
       </Box>
     )
   })
@@ -4394,7 +4557,7 @@ export const register: Register = (on, _options) => {
   on('ui.render', { component: 'Pane', requestId: TICKET_PANE }, async ($, e) => {
     const { Box, Link, Markdown, Text } = $.ui.resolve(e)
     const page = await read($, ticketPage)
-    if (page === null) return <Text dimColor>No ticket is open.</Text>
+    if (page === null) return <Text dimColor>No issue is open.</Text>
     const meta = [page.state.toLowerCase(), ...page.labels].filter(one => one !== '').join(' · ')
     const comments = page.comments
       .map(one => `---\n\n**${one.login === '' ? 'someone' : one.login}**\n\n${one.body.trim()}`)
@@ -4728,8 +4891,13 @@ export const register: Register = (on, _options) => {
     if ((await read($, cardMode)) === 'native' && e.surface === 'desktop') {
       const stored = (item === undefined ? request.note : item.comment) ?? ''
       // The comment is typed in the pane (ADR 0047): Comment opens the desktop's own Input, which saves only on
-      // Save or Enter, or with a verdict; Cancel drops what was typed. Focus leaving it changes nothing.
-      const isOpen = await isCommentOpen($)
+      // Save or Enter, or with a verdict; Cancel drops what was typed. Escape reaches a mod only as the pane losing
+      // the keyboard, which a click on the composer also is, so losing it closes the field and keeps what was typed
+      // for Comment to bring back (the owner, 2026-11-01: "escape won't be a substitute for cancel, but it will at least do something").
+      // A draw cannot write the store, so the fold is held here until Comment opens the field again.
+      if (paneHadKeyboard && !e.props.isFocused) commentFolded = true
+      paneHadKeyboard = e.props.isFocused
+      const isOpen = (await isCommentOpen($)) && !commentFolded
       const draftAt = draftKey({ request: qidOf(request), item: index, heading: item?.heading ?? null })
       const pressed = (action: Action) => (p: { surface: RenderSurface }) => void pressNative($, action, p.surface, 'button')
       // Comment is always the button; what it opens, the field, takes the row under it, where a saved comment rests.
@@ -4775,6 +4943,7 @@ export const register: Register = (on, _options) => {
         items: request.items.map(one => ({
           heading: one.heading,
           text: withoutPictures(one.body) || (picturesOf(one.body).length > 0 ? '' : '(empty item)'),
+          kind: one.kind,
           verdict: one.verdict,
         })),
         index,
@@ -4787,32 +4956,50 @@ export const register: Register = (on, _options) => {
       // the comment and the buttons below. Lines are measured at about 7pt a character in the pane's width (#100).
       const lineRows = (text: string) => (text === '' ? 0 : Math.ceil((text.length * 7) / Math.max(140, (e.props.bodyColumns - 2) * 7.8)) + 1)
       // The item's pictures, under its text, each drawn to its share of the pane's width (issue 87).
-      const shown = picturesFor(request, item)
+      const all = picturesFor(request, item)
+      const isFilm = (one: { video?: true; url: string }) => one.video === true && videos.get(one.url) !== 'image'
+      const shown = all.filter(one => !isFilm(one))
+      // A video draws as a Play button that opens the film with sound; the desktop has no video element (#132).
+      const films = all.filter(isFilm)
       // A picture opens full size here, in the pane, never as a thumbnail or in another app (the owner, 2026-10-23, #102).
       const pictureKey = await proseKey($, `${request.id}#${item?.index ?? 0}`)
       const viewing = (await read($, composedView)).viewing
       const open = viewing?.item === pictureKey && viewing.index < shown.length ? viewing.index : null
       const view$ = (index: number | null) => void update($, composedView, v => ({ ...v, viewing: index === null ? null : { item: pictureKey, index } }))
       const root = await $.session.cwd()
-      const states = shown.map(one => pictureOf($, one.url, root))
-      const first = states[0]
+      const sizes = shown.map(one => pictureSize($, one.url, root))
       const room = cardWidth(e.props.bodyColumns)
       // Every picture the item carries draws on the page, two to a row when there are several, so the
       // person sees them here rather than behind Open (the owner's ruling on #90, 2026-10-23).
       const across = shown.length > 1 ? 2 : 1
       const pictureRowsOf = Math.ceil(shown.length / across)
-      // A lone picture takes the rows the card leaves it, about 14 for the back arrow, dots, question and
-      // the three rows of controls (measured on the desktop, #124), so a tall mock draws as large as fits;
-      // several share about half the pane.
-      const tall = shown.length === 1 ? Math.max(Math.round(paneRows * 19 * 0.45), (paneRows - 14) * 19) : Math.round((paneRows * 19 * 0.45) / Math.max(1, pictureRowsOf))
+      // A lone picture takes the rows the card leaves it: 12 for the back arrow, dots, gaps and the three rows of
+      // controls, and the question's own wrapped rows (measured on the desktop, #124), so a tall mock draws as
+      // large as fits and a long question never pushes the controls past the pane; several share about half of it.
+      const reserved = 12 + lineRows(item?.heading ?? '')
+      const tall = shown.length === 1 ? Math.max(Math.round(paneRows * 19 * 0.45), (paneRows - reserved) * 19) : Math.round((paneRows * 19 * 0.45) / Math.max(1, pictureRowsOf))
       const cell = across === 1 ? room : Math.floor((room - 10) / 2)
-      const drawn = states.map(one => {
-        if (typeof one === 'string') return null
-        // A tall mock fitted to the card's height would draw its text too small to read, so it keeps the card's width (#124).
-        const size = legible(one.width, one.height, cell, tall)
-        const source = pictureSvg(one.base64, size.width, size.height)
-        return source === null ? null : { size, source }
+      // A tall mock fitted to the card's height would draw its text too small to read, so it keeps the card's width (#124).
+      // It draws as strips stacked with no gap, each its own copy, sharing the tree's picture budget, so its type stays
+      // sharp where one squeezed copy blurred (#136); to the eye it is one image the card scrolls by (ADR 0049).
+      type Drawn = { width: number; height: number; strips: { source: string; width: number; height: number }[] }
+      const stripped = (url: string, size: { width: number; height: number }, frame: number, high: number, share: number): Drawn | 'failed' | 'pending' | 'too large' => {
+        const across = legible(size.width, size.height, frame, high).width
+        const plan = stripsOf(size.width, size.height, across, share)
+        const loaded = plan.map(one => ({ one, state: pictureOf($, url, root, one.strip) }))
+        if (loaded.some(one => one.state === 'failed')) return 'failed'
+        if (loaded.some(one => one.state === 'pending')) return 'pending'
+        const strips = loaded.map(({ one, state }) => ({ source: pictureSvg((state as Loaded).base64, one.width, one.height), width: one.width, height: one.height }))
+        if (strips.some(one => one.source === null)) return 'too large'
+        return { width: across, height: strips.reduce((sum, one) => sum + one.height, 0), strips: strips as Drawn['strips'] }
+      }
+      const pictureStates = shown.map((one, i) => {
+        const size = sizes[i]!
+        return typeof size === 'string' ? size : stripped(one.url, size, cell, tall, Math.floor(TREE_PICTURES / shown.length))
       })
+      // A picture's state: its size and file once every strip is in, else why not.
+      const states = pictureStates.map((one, i) => (one === 'failed' || one === 'pending' ? one : sizes[i]! as Exclude<typeof sizes[number], string>))
+      const drawn = pictureStates.map(one => (typeof one === 'string' ? null : one))
       // An image's alt text is its Svg's alone, never a caption under it; Full size shows it in the pane (#105).
       // The height the full view gives a picture: the pane less its back arrow and a margin.
       const fullTall = Math.max(8, paneRows - 4) * 19
@@ -4837,8 +5024,12 @@ export const register: Register = (on, _options) => {
                         </Text>
                       ) : (
                         // The engine keeps no key on an Svg, so a Box carries it. A plain Svg, since an interactive one draws no bitmap.
-                        <Box key="picture">
-                          <Svg source={d.source} alt={one.alt} width={d.size.width} height={d.size.height} />
+                        <Box key="picture" flexDirection="column">
+                          {d.strips.map((strip, k) => (
+                            <Box key={`strip-${k}`}>
+                              <Svg source={strip.source} alt={k === 0 ? one.alt : ''} width={strip.width} height={strip.height} />
+                            </Box>
+                          ))}
                         </Box>
                       )}
                       {/* Only a picture the pane cannot draw opens in another app; one it draws opens full size here (the owner, 2026-10-23). */}
@@ -4854,7 +5045,34 @@ export const register: Register = (on, _options) => {
             ))}
           </Box>
         )
-      const composed = await composedOf($, e, item, 'desktop', pictureGrid === null ? null : { count: shown.length, node: pictureGrid }, fullSize)
+      const filmRows =
+        films.length === 0 ? null : (
+          <Box key="films" flexDirection="column" flexShrink={0} gap={1}>
+            {films.map((one, i) => {
+              const state = videoState($, one.url, root)
+              return (
+                <Box key={`film-${i}`} flexDirection="row" columnGap={1} alignItems="center">
+                  {typeof state === 'object' ? (
+                    <Button key="play" label={playLabel(state.seconds)} onPress={() => void $.process.run(['open', state.file], { timeoutMs: 5000 }).catch(() => undefined)} />
+                  ) : state === 'failed' && /^https:/.test(one.url) ? (
+                    <Button key="play" label="▶ Open in browser" onPress={() => void $.process.run(['open', one.url], { timeoutMs: 5000 }).catch(() => undefined)} />
+                  ) : null}
+                  <Text key="film-name" dimColor wrap="wrap">
+                    {state === 'pending' ? 'Fetching the film…' : state === 'failed' ? `The film could not load${one.alt === '' ? '' : `: ${one.alt}`}` : one.alt}
+                  </Text>
+                </Box>
+              )
+            })}
+          </Box>
+        )
+      const media =
+        filmRows === null ? pictureGrid : pictureGrid === null ? filmRows : (
+          <Box key="media" flexDirection="column" flexShrink={0} gap={1}>
+            {filmRows}
+            {pictureGrid}
+          </Box>
+        )
+      const composed = await composedOf($, e, item, 'desktop', media === null ? null : { count: all.length, node: media }, fullSize)
       const body =
         Client === undefined ? null : composed === null ? (
           <Client key="body" width="100%" height="100%" module="../panes/human-queue/native-body.tsx" props={bodyProps(card)} />
@@ -4863,9 +5081,9 @@ export const register: Register = (on, _options) => {
           <Client key="body" width="100%" module="../panes/human-queue/native-body.tsx" props={{ ...bodyProps(card), title: '', source: '', setup: '', heading: null, blocks: [] }} />
         )
       const pictureRow =
-        pictureGrid === null || composed !== null ? null : (
+        media === null || composed !== null ? null : (
           <Box key="pictures-slot" flexDirection="column" flexShrink={0} gap={1}>
-            {pictureGrid}
+            {media}
             {fullSize === null ? null : (
               <Box key="picture-row" flexDirection="row">
                 {fullSize}
@@ -4873,13 +5091,13 @@ export const register: Register = (on, _options) => {
             )}
           </Box>
         )
-      const fullState = open === null ? undefined : states[open]
+      // The full view draws the picture at the pane's width, in strips that have the tree's whole budget (#136).
+      const fullSizeOf = open === null ? undefined : sizes[open]
+      const fullState = open === null || fullSizeOf === undefined || typeof fullSizeOf === 'string' ? undefined : stripped(shown[open]!.url, fullSizeOf, room, fullTall, TREE_PICTURES)
       const full =
-        open === null || fullState === undefined || typeof fullState === 'string' || Svg === undefined
+        open === null || fullState === undefined || Svg === undefined
           ? null
           : (() => {
-              const size = legible(fullState.width, fullState.height, room, fullTall)
-              const source = pictureSvg(fullState.base64, size.width, size.height)
               const step = (by: number) => () => view$((open + by + shown.length) % shown.length)
               return (
                 <Box key="full-picture" flexDirection="column" flexShrink={0} gap={1}>
@@ -4891,13 +5109,17 @@ export const register: Register = (on, _options) => {
                       {shown.length > 1 ? `${open + 1} of ${shown.length}` : ''}
                     </Text>
                   </Box>
-                  {source === null ? (
+                  {typeof fullState === 'string' ? (
                     <Text key="full-state" dimColor wrap="wrap">
-                      The picture is too large to draw here.
+                      {fullState === 'pending' ? 'Loading the picture…' : fullState === 'failed' ? 'The picture could not load.' : 'The picture is too large to draw here.'}
                     </Text>
                   ) : (
-                    <Box key="full-svg">
-                      <Svg source={source} alt={shown[open]!.alt} width={size.width} height={size.height} />
+                    <Box key="full-svg" flexDirection="column">
+                      {fullState.strips.map((strip, k) => (
+                        <Box key={`full-strip-${k}`}>
+                          <Svg source={strip.source} alt={k === 0 ? shown[open]!.alt : ''} width={strip.width} height={strip.height} />
+                        </Box>
+                      ))}
                     </Box>
                   )}
                 </Box>
@@ -4912,6 +5134,9 @@ export const register: Register = (on, _options) => {
         {
           yes: pressed('yes'),
           no: pressed('no'),
+          a: pressed('a'),
+          same: pressed('same'),
+          b: pressed('b'),
           r: pressed('submit'),
           back: pressed('prev'),
           next: pressed('next'),
@@ -4978,7 +5203,7 @@ export const register: Register = (on, _options) => {
               slide: index,
             },
             (Input === undefined ? 50 : 102) + (toPlate === null ? 0 : 50),
-            `${label(request)}. ${item !== undefined ? `Item ${index} of ${counts(request).total} · ✓ ${counts(request).yes} · ✗ ${counts(request).no} · ${counts(request).unruled} left. ${screenRequest.setup} ${screenRequest.items[index - 1]?.text ?? ''}` : `Plain ask. ${screenRequest.setup}`}`,
+            `${label(request)}. ${item !== undefined ? `Item ${index} of ${counts(request).total} · ${item.kind === 'pair' ? tallyText(request) : `✓ ${counts(request).yes} · ✗ ${counts(request).no} · ${counts(request).unruled} left`}. ${screenRequest.setup} ${screenRequest.items[index - 1]?.text ?? ''}` : `Plain ask. ${screenRequest.setup}`}`,
           )}
           <Box key="below" flexDirection="column" gap={1} flexShrink={0}>
             {/* Two columns. The left stacks the comment field over the ruling row, and
@@ -5013,8 +5238,9 @@ export const register: Register = (on, _options) => {
                 )}
                 <Box key="slim" flexDirection="row" columnGap={1} alignItems="center">
                   {request.items.length === 0 ? slim('done', 'Done', 'w', 'yes') : null}
-                  {request.items.length === 0 ? null : slim('no', 'No', 's', 'no')}
-                  {request.items.length === 0 ? null : slim('yes', 'Yes', 'w', 'yes')}
+                  {item?.kind === 'pair' ? slim('a', 'A', 'x', 'a') : request.items.length === 0 ? null : slim('no', 'No', 's', 'no')}
+                  {item?.kind === 'pair' ? slim('same', 'Same', 'c', 'same') : null}
+                  {item?.kind === 'pair' ? slim('b', 'B', 'v', 'b') : request.items.length === 0 ? null : slim('yes', 'Yes', 'w', 'yes')}
                   {request.items.length === 0 ? null : slim('prev', '◀', 'a', 'prev')}
                   {request.items.length === 0 ? null : slim('next', '▶', 'd', 'next')}
                   {request.items.length === 0 ? null : slim('submit', 'Submit', 'r', 'submit')}
@@ -5050,15 +5276,17 @@ export const register: Register = (on, _options) => {
       <Text key="progress" dimColor>
         {item === undefined
           ? [request.opened === null ? null : `Opened ${request.opened}`, 'Plain ask'].filter(Boolean).join(' · ')
-          : `Item ${index} of ${tally.total} · ✓ ${tally.yes} · ✗ ${tally.no} · ${tally.unruled} left`}
+          : item.kind === 'pair'
+            ? `Item ${index} of ${tally.total} · ${tallyText(request)}`
+            : `Item ${index} of ${tally.total} · ✓ ${tally.yes} · ✗ ${tally.no} · ${tally.unruled} left`}
       </Text>
     )
     const header = <Text bold wrap="truncate-end">{label(request)}</Text>
     const CARD_CHARS = 320
     const capped = (text: string) => (text.length > CARD_CHARS ? `${text.slice(0, CARD_CHARS).trimEnd()}…` : text)
     const cardText = capped(plainQuote(item !== undefined ? item.body || '(empty item)' : request.issue === undefined ? request.body : ''))
-    const verdictColor = item?.verdict === 'yes' ? 'success' : item?.verdict === 'no' ? 'error' : 'subtle'
-    const state = item === undefined ? 'To do' : item.verdict === 'yes' ? 'Yes' : item.verdict === 'no' ? 'No' : 'Not ruled'
+    const verdictColor = item?.verdict === 'no' ? 'error' : item?.verdict == null ? 'subtle' : 'success'
+    const state = item === undefined ? 'To do' : item.verdict === null ? 'Not ruled' : ({ yes: 'Yes', no: 'No', a: 'A', b: 'B', same: 'Same' } as const)[item.verdict]
     const card = (
       item === undefined && cardText === '' ? null : <Box key="card" flexDirection="column" height={9} overflow="hidden" borderStyle="round" borderColor={verdictColor} paddingX={1} gap={1}>
         <Box flexDirection="row" justifyContent="space-between" columnGap={1}>
@@ -5120,8 +5348,18 @@ export const register: Register = (on, _options) => {
           <Button key="done" label={`✓ Done${hint('W')}`} hotkey="w" variant="primary" onPress={press('yes')} />
         ) : (
           <>
-            <Button key="no" label={`✗ No${hint('S')}`} hotkey="s" variant={item.verdict === 'no' ? 'primary' : 'secondary'} onPress={press('no')} />
-            <Button key="yes" label={`✓ Yes${hint('W')}`} hotkey="w" variant={item.verdict === 'no' ? 'secondary' : 'primary'} onPress={press('yes')} />
+            {item.kind === 'pair' ? (
+              <>
+                <Button key="a" label={`A${hint('X')}`} hotkey="x" variant={item.verdict === 'a' ? 'primary' : 'secondary'} onPress={press('a')} />
+                <Button key="same" label={`Same${hint('C')}`} hotkey="c" variant={item.verdict === 'same' ? 'primary' : 'secondary'} onPress={press('same')} />
+                <Button key="b" label={`B${hint('V')}`} hotkey="v" variant={item.verdict === 'b' ? 'primary' : 'secondary'} onPress={press('b')} />
+              </>
+            ) : (
+              <>
+                <Button key="no" label={`✗ No${hint('S')}`} hotkey="s" variant={item.verdict === 'no' ? 'primary' : 'secondary'} onPress={press('no')} />
+                <Button key="yes" label={`✓ Yes${hint('W')}`} hotkey="w" variant={item.verdict === 'no' ? 'secondary' : 'primary'} onPress={press('yes')} />
+              </>
+            )}
             {nav('prev', '◀', 'a', 'prev')}
             {nav('next', '▶', 'd', 'next')}
           </>

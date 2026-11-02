@@ -1,6 +1,6 @@
 {
   "name": "vantage-point",
-  "version": "0.219.0",
+  "version": "0.243.0",
   "description": "Vantage Point: a HUD above the Claude Code prompt, and the human queue, where agents queue asks and you rule yes/no with comments, from the desktop or your phone.",
   "author": {
     "name": "Leit-motif"
@@ -16,12 +16,6 @@
   ],
   "types": "./types/index.d.ts",
   "userConfig": {
-    "frontierScript": {
-      "type": "string",
-      "title": "Frontier script",
-      "description": "Path to agent-config's scripts/spec-frontier.mjs. Empty or missing: the frontier comes from this repo's issue labels.",
-      "default": ""
-    },
     "readerGist": {
       "type": "boolean",
       "title": "Reader gist",

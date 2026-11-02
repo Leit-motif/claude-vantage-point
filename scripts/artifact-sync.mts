@@ -46,6 +46,9 @@ export function requestDoc(request: Request, source: string, now: number): Recor
 export function exportRequest(text: string, id: string, source: string, out: string, now = Date.now()) {
   const request = findRequest(parse(text), id)
   if (request === undefined) throw new Error(`No request ${id} in the queue file.`)
+  // The artifact rules yes or no; a pair's A, Same and B are ruled in the pane (#125).
+  const pair = request.items.find(item => item.kind === 'pair')
+  if (pair !== undefined) throw new Error(`Request ${id} holds a pair item (${pair.heading}), which the artifact cannot rule: hand it over through the review tool.`)
   const rid = requestDocId(source, request.id)
   const dir = resolve(out)
   mkdirSync(join(dir, 'items'), { recursive: true })

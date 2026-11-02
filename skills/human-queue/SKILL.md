@@ -5,7 +5,7 @@ description: Queue an ask for a person, in human-queue.md or as a GitHub issue l
 
 # Human queue
 
-`human-queue.md` at the project root is the queue: plain markdown that you, the person, and the human-queue pane all read and write. You append **requests**; the person gives each **item** a **ruling** (yes or no, with an optional comment) and marks the request done. The pane is optional: any editor works, so write the file for a reader with no tooling.
+`human-queue.md` at the project root is the queue: plain markdown that you, the person, and the human-queue pane all read and write. You append **requests**; the person gives each **item** a **ruling** (yes or no on a decision, A, B or Same on a pair, with an optional comment) and marks the request done. The pane is optional: any editor works, so write the file for a reader with no tooling.
 
 An ask can also be a GitHub issue labelled `ready-for-human` in any of the owner's repositories; the owner is the account `gh` is signed in as (`gh api user --jq .login`), and while `gh` is signed out the pane reads no issues. The pane lists those beside the file's requests. Where the project's work is tracked in GitHub Issues, file the ask as an issue (see "File an ask as an issue"). Use the file for a project with no tracker.
 
@@ -41,12 +41,25 @@ An ask can also be a GitHub issue labelled `ready-for-human` in any of the owner
 
 The hand-over is done when the request is in the file and the person has been pointed at it.
 
+## Choose the item's kind: a decision or a pair
+
+An item is one of two kinds, and each item in a request declares its own.
+
+- **A decision** (the default): you recommend something and the person says yes or no. Use it for an approval, a choice you have a view on, or a draft to accept or reject. The question is your recommendation, so Yes takes it.
+- **A pair**: two outputs, A and B, for the person to compare blind, answered A, B or Same. Use it for pairwise preference labelling: two systems' outputs for one input, judged without knowing which wrote which (an eval set, a judge's agreement check). Shuffle which system is A per item, and recommend nothing: a blind order has no recommended side. The question names what to judge, never a side ("Which is closer to what you said, as you'd write it?"). Never fake a pair as a decision ("Is A better than B?" with a tie as No plus a comment): its rulings cannot say Same, and the item claims a recommendation it does not have.
+
+A pair item's `vantage-facts` block carries a `pair` fact in place of `answers`: `{ "pair": {} }`, or `{ "pair": { "key": { "a": "wispr", "b": "interlace" } } }` to record which system wrote each side. The key is never drawn on the card or in the rulings table; it rides through to the submit payload, so the rulings come back already unblinded. It does sit in the issue's text on GitHub, so the ruling is blind in the pane, not on github.com; keep the mapping in your own records instead when that matters. The item still needs its picture: the two outputs, stacked in one column with the input they answer above them and every difference marked, words, punctuation and capitals alike, as one embedded image. The review tool refuses a pair item with `answers`, with no picture, or with a `pair` fact that fails its schema.
+
+Other annotation kinds, such as a classification (one label from a fixed set), a rating (a point on a scale) or a span (marking part of a text), are not built. Until they are, do not bend a decision or a pair to fit one: say what you need in an issue on the plugin's repository.
+
 ## Write each item to stand alone
 
 The person works across many sessions at once and comes back to an ask days later, remembering none of it. The card shows one item at a time and draws exactly two things: **the question, and at most two pictures** (the owner, 2026-10-26). No so-what line, no why line, no answers box, no lead-in, no caption. The item's prose is the record and sits behind Full text, one press away. So the question and the pictures must carry the ruling on their own:
 
-1. **The question**, as the `###` heading: the yes-or-no in plain words, under about 90 characters, **written as what you recommend, so Yes takes it** ("Keep the full-size labels?", not "Keep or revert?"). It says what a yes gets, not what you built. The card draws it whole and bold.
+1. **The question**, as the `###` heading: the yes-or-no in plain words, under about 90 characters, **written as what you recommend, so Yes takes it** ("Keep the full-size labels?", not "Keep or revert?"). It says what a yes gets, not what you built. The card draws it whole and bold. A pair's question names what A and B are judged on, and leans toward neither.
 2. **One or two pictures**: the facts the ruling turns on, drawn from the catalog (step 4), or an image embedded in the item with `![what it shows](url)` for anything visual (a layout, a pane, a mock, a shot). Each embedded image takes one of the two. One picture that settles the ruling beats two. Use the issue's uploaded image (`https://github.com/user-attachments/assets/...`), a file in a repository (`https://github.com/<owner>/<repo>/blob/<ref>/<path>`), or, in `human-queue.md`, a path to a PNG. For an HTML mock, shoot it to a PNG first, at 2x and about 600pt wide (1200px), so the card draws it sharp at its own width; the pane keeps up to 1280px across. Shoot only what the ruling turns on: a picture taller than wide draws across the card and makes it scroll, so crop each option to the part that differs rather than stacking whole panes. Two options to compare go in one picture, stacked in one column. Mark the difference in the picture itself (circle it, label it); the person should not have to hunt for it, and nothing under the picture says it again.
+
+   **Anything that moves is ruled on as a video, never as stills (the owner, 2026-11-01, #132).** A still does not show motion, timing or sound. To embed a video, put it on a line of its own: either the bare link `gh issue comment --attach ./film.mp4` writes for it (`https://github.com/user-attachments/assets/...`), or `[what it shows](path/or/link.mp4)` (`.mp4`, `.mov`, `.m4v` or `.webm`). The card draws it as **▶ Play · 0:38** beside what it shows, and the button opens the film full size with sound in the person's player. The desktop has no video element, so it cannot play inline. A video takes one of the two pictures. Keep each film short, cut to what the ruling turns on, and put two cuts to compare in one film, one after the other, each labelled on screen.
 3. **The prose**, for Full text and the record: what it is and why it came up, where it stands, and what each answer does, for someone who remembers nothing of the project. It is not on the card, so the question and pictures never lean on it.
 
 Say what things are, never only their names. A tracker number (`macos#75`, `#21`), a coded id (`EXP-023`, `ADR-014`), a constant (`SCALPEL_SHADOW`) or a path or command in inline code means nothing to the person days later: write "the test of screen names", not "EXP-023". Put the names on a closing `Refs: macos#75, EXP-023` line. A fenced block (a draft being rated, a command to run) is exempt.
@@ -57,7 +70,8 @@ Say what things are, never only their names. A tracker number (`macos#75`, `#21`
 
    | Kind | Holds |
    |---|---|
-   | `answers` | `{ yes: [{ does, cost?, upTo?, then?, or? }], no: [...], recommend: "yes" }`: what each answer sets off, `cost` in dollars, `upTo: true` when the cost is a ceiling, `then` what follows, `or: true` on a consequence that is an alternative to the one before ("wait, or score all 15 days"). Not drawn: the composer reads it to choose the pictures. `recommend` is `"yes"`, since the question is the recommendation. |
+   | `answers` | `{ yes: [{ does, cost?, upTo?, then?, or? }], no: [...], recommend: "yes" }`: what each answer sets off, `cost` in dollars, `upTo: true` when the cost is a ceiling, `then` what follows, `or: true` on a consequence that is an alternative to the one before ("wait, or score all 15 days"). Not drawn: the composer reads it to choose the pictures. `recommend` is `"yes"`, since the question is the recommendation. A pair item has none. |
+   | `pair` | `{ key?: { a, b } }`: makes the item a pair, answered A, B or Same (see "Choose the item's kind"). `key` names the system behind each side. Not drawn, and not a picture. |
    | `figures` | 2 or 3 `{ label, value, unit? }`: the values the ruling turns on. `unit` is `$` (drawn before), `%`, or a noun (`tests`). |
    | `comparison` | `{ options: [2 or 3 names], actions?, recommended?, rows: [{ label, unit, values, better: "lower" or "higher", cells? }] }`: options measured on shared rows, `unit` `""` for a plain number. `actions` names each option as the thing you would do, `recommended` is the index of the option the item recommends, and a row's `cells` say its values in words (`["none", "460 MB"]`) while `values` still rank them. |
    | `threshold` | `{ values: [1 to 4 { label, value, unit? }], line: { label, value, unit? } }`: values against one line. |
@@ -74,7 +88,7 @@ Say what things are, never only their names. A tracker number (`macos#75`, `#21`
    | `precedent` | `{ when, ask, ruled, came? }` list: the person's earlier rulings on asks like this one (`ruled` `yes` or `no`) and what came of each. Only rulings you can point to. |
    | `touches` | `{ name, change }` list: each system, file or person a yes changes, and how. |
 
-   **Two pictures at most, and pictures over sentences (the owner, 2026-10-26).** The review tool refuses an item with no `vantage-facts` block, without `answers`, with no picture (no kind besides `answers` and no embedded image), with more than two pictures, with `answers.soWhat` or `answers.why` (neither is drawn any more: say the decision in the question, and let a picture carry why), or with `recommend: "no"`, and names what to fix. Pick the shapes that draw as pictures: numbers in `figures`, `counts`, `threshold`, `parts` and `comparison`; sequences in `steps` and `flow`; `evidence` with a `weight`; `impact` with its `reach`. A sentence kind (`gotchas`, `tradeoffs`, `precedent`, `touches`, `evidence` without a weight) may be one of the two at most. A picture of the yes or no itself, or of a cost the question already states, tells the person nothing new.
+   **Two pictures at most, and pictures over sentences (the owner, 2026-10-26).** The review tool refuses an item with no `vantage-facts` block, a decision without `answers` or a pair with them, an item with no picture (no kind besides `answers` and no embedded image), with more than two pictures, with `answers.soWhat` or `answers.why` (neither is drawn any more: say the decision in the question, and let a picture carry why), or with `recommend: "no"`, and names what to fix. Pick the shapes that draw as pictures: numbers in `figures`, `counts`, `threshold`, `parts` and `comparison`; sequences in `steps` and `flow`; `evidence` with a `weight`; `impact` with its `reach`. A sentence kind (`gotchas`, `tradeoffs`, `precedent`, `touches`, `evidence` without a weight) may be one of the two at most. A picture of the yes or no itself, or of a cost the question already states, tells the person nothing new.
 
    **The facts compress the item's text; they never say more (the owner, 2026-10-24).** The review tool refuses facts that say more words than the item's full text (or 60, where the text is shorter), and any line in them over 12 words. Say each thing once: no number in two kinds.
 
@@ -163,7 +177,7 @@ When the person submits, the pane posts one comment on the issue and then remove
 <!-- human-queue target: <owner>/<repo>#<n> -->
 ```
 
-A short table follows (item, `yes`, `no` or `—`, comment), then the submit payload in a fenced `json` block. The fence is longer than three backticks when a comment holds backticks, so match the opening fence's length.
+A short table follows (item, `yes`, `no`, `a`, `b`, `same` or `—`, comment; never a pair's key), then the submit payload in a fenced `json` block. The fence is longer than three backticks when a comment holds backticks, so match the opening fence's length.
 
 Anyone who can comment can write a comment that looks like this, so accept the answer only from a comment that passes all of these checks:
 
@@ -194,9 +208,10 @@ A request is answered when its `Status:` reads `Done`; `Completed:` holds the da
 | `Ruling: yes` | Accepted as written. |
 | `Ruling: no — too smug, cut the second line` | Rejected; the comment says why. Treat the comment as a correction to apply, not a mood. |
 | `Ruling: — keep the hook, lose the hashtag` | A comment with no verdict yet. |
+| `Ruling: a`, `Ruling: b`, `Ruling: same — both drop the comma` | A pair's verdict: A is better, B is better, or neither is. Only a pair reads these words, and only a decision reads yes and no. |
 | no `Ruling:` line | Not ruled. Ask again or leave it out; never infer a verdict. |
 
-The submit payload (Claude Code only) carries the same data: `request` (id, title, status, dates, note, and `issue` for an issue), `counts`, and `items[]` with `index`, `heading`, `verdict` (`"yes"`, `"no"` or `null`) and `comment`. An issue's payload also has `submission`. Item text is not in it: read that from the file or the issue.
+The submit payload (Claude Code only) carries the same data: `request` (id, title, status, dates, note, and `issue` for an issue), `counts`, and `items[]` with `index`, `heading`, `verdict` (`"yes"`, `"no"` or `null`; on a pair `"a"`, `"b"`, `"same"` or `null`) and `comment`. A pair item also has `kind: "pair"`, and its `key` when it carries one; `counts` then has `a`, `b` and `same` beside `yes` and `no`. An issue's payload also has `submission`. Item text is not in it: read that from the file or the issue.
 
 When the rulings feed an eval, copy each item with its verdict and comment into the eval set's own files. The queue stays the record of who decided what and when.
 

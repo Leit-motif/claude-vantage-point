@@ -3,7 +3,8 @@
 // `/vantage-point picture`. It meets
 // docs/design.md: the body (panes/human-queue/native-body.tsx: a row of dots, as
 // the band's, carrying every verdict and the place, then the ask and the item's
-// card), a footer: ◀, No, Yes and ▶ on the leading edge and Submit alone on the
+// card), a footer: ◀, No, Yes and ▶ on the leading edge (◀, A, Same, B and ▶ on a
+// pair item, #125) and Submit alone on the
 // trailing one, drawn on the last item only and
 // white once every item is answered. Nothing has a letter key: the pane seldom holds
 // the keyboard, so the letters typed into the chat instead (the owner, 2026-10-29).
@@ -16,7 +17,7 @@
 import type { BoxProps, ButtonProps, ElementConstructor, RenderChildren, RenderElement, TextProps } from 'claude-code'
 import { blocks } from '../panes/human-queue/markdown'
 import { withoutPictures } from '../panes/human-queue/pictures'
-import type { Request } from '../panes/human-queue/queue'
+import type { ItemKind, Request, Verdict } from '../panes/human-queue/queue'
 import type { BodyProps } from '../panes/human-queue/native-body'
 import { plainQuote } from './reply'
 import { CARD_LINE, FILL, QUIET, RECOMMENDED, REST_LINE, SIGNAL_RED } from './signal'
@@ -45,8 +46,8 @@ export function setupText(request: Request): string {
 
 const SETUP_MAX = 480
 
-export type NativeVerdict = 'yes' | 'no' | null
-export type NativeItem = { heading: string; text: string; verdict: NativeVerdict }
+export type NativeVerdict = Verdict | null
+export type NativeItem = { heading: string; text: string; kind: ItemKind; verdict: NativeVerdict }
 
 export type NativeCard = {
   /** Where the rulings go: `my-app#45`, or the project and `human-queue.md`. */
@@ -76,7 +77,7 @@ export type NativeCard = {
 }
 
 type Press = ButtonProps['onPress']
-export type NativePresses = { yes: Press; no: Press; r: Press; back: Press; next: Press; plate?: Press }
+export type NativePresses = { yes: Press; no: Press; a: Press; same: Press; b: Press; r: Press; back: Press; next: Press; plate?: Press }
 
 export type NativeElements = {
   Box: ElementConstructor<BoxProps>
@@ -97,20 +98,26 @@ export function rSubmits(card: Pick<NativeCard, 'items' | 'index'>): boolean {
  * Each item's dot colour: a ruled item its verdict's from the press on, an
  * unruled one the band's idle grey (the owner, 2026-10-17). Colour says only the
  * verdict; the body draws the current item hollow, so the place shows
- * whatever its state.
+ * whatever its state. A pair's A, B and Same are none of them a no, so each
+ * draws the answered green.
  */
 export function strip(items: readonly { verdict: NativeVerdict }[]): string[] {
   return (items.length === 0 ? [{ verdict: null }] : items).map(one =>
-    one.verdict === 'yes' ? PALETTE.yes : one.verdict === 'no' ? PALETTE.no : PALETTE.quiet,
+    one.verdict === null ? PALETTE.quiet : one.verdict === 'no' ? PALETTE.no : PALETTE.yes,
   )
 }
+
+/** A pair item's pick as its dot draws it (ADR 0049): A, S or B, never =, which an underline turns into ≡. */
+const PICK: Partial<Record<Verdict, string>> = { a: 'A', b: 'B', same: 'S' }
 
 /** What the card's body draws, as its surface module takes it. */
 export function bodyProps(card: NativeCard): BodyProps {
   const plain = card.items.length === 0
   const item = plain ? undefined : card.items[card.index - 1]
+  const hasPair = card.items.some(one => one.kind === 'pair')
   return {
     dots: plain ? [] : strip(card.items),
+    ...(hasPair ? { marks: card.items.map(one => (one.verdict === null ? null : (PICK[one.verdict] ?? null))) } : {}),
     current: card.index,
     title: card.title,
     // The dots give the place; a second count of requests read against them (the design review, 2026-10-24).
@@ -140,6 +147,9 @@ export function nativeCard(
 ): RenderElement {
   const { Box, Button } = el
   const plain = card.items.length === 0
+  const item = card.items[card.index - 1]
+  // Plain, as No and Yes are: the dot says which was picked, and white stays Submit's alone (the design review, 2026-10-31).
+  const choice = (key: 'a' | 'same' | 'b', label: string) => <Button key={key} label={label} onPress={on[key]} />
 
   return (
     // A composed card runs to its own height, the pane scrolling where its two pictures need it to (#105).
@@ -175,8 +185,9 @@ export function nativeCard(
       <Box key="footer" flexDirection="row" alignItems="center" columnGap={1} flexShrink={0}>
         {/* At either end the step that cannot move is drawn dim, as a native app dims an action that cannot act. */}
         {plain ? null : <Button key="back" label="◀" dimColor={card.index <= 1} onPress={on.back} />}
-        {plain ? null : <Button key="no" label="No" onPress={on.no} />}
-        <Button key="yes" label={plain ? 'Done' : 'Yes'} onPress={on.yes} />
+        {item?.kind === 'pair' ? choice('a', 'A') : plain ? null : <Button key="no" label="No" onPress={on.no} />}
+        {item?.kind === 'pair' ? choice('same', 'Same') : null}
+        {item?.kind === 'pair' ? choice('b', 'B') : <Button key="yes" label={plain ? 'Done' : 'Yes'} onPress={on.yes} />}
         {rSubmits(card) ? (
           // On the last item, where ▶ has nowhere to go, it is Submit, as the return glyph (the owner, 2026-10-29);
           // white only once every item is answered (the owner, 2026-10-17), the standard grey until then.

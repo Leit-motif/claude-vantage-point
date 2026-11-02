@@ -60,22 +60,6 @@ export function composeItem(item: FactItem): ComposeItem | null {
   return { id, question: item.heading, answers, prose: item.body, facts: held.facts }
 }
 
-/** What a deck decision carries that the composer reads (#100): the call, its options, why, and its checked facts. */
-export type FactDecision = { ask: string; options: readonly string[]; recommend: number; why?: string; reason?: string; facts?: Facts }
-
-/**
- * A deck decision as the composer reads it, or null when it carries no facts. Its
- * answers are the options, the recommended one marked; its prose is why and the
- * reason. Its id hashes what its plan depends on, kept apart from any ask item's.
- */
-export function composeDecision(d: FactDecision): ComposeItem | null {
-  if (d.facts === undefined || Object.keys(d.facts).length === 0) return null
-  const answers = `Options: ${d.options.map((one, i) => (i === d.recommend ? `${one} (recommended)` : one)).join('; ')}.`
-  const prose = [d.why, d.reason].filter(text => text !== undefined && text !== '').join(' ')
-  const id = hash(JSON.stringify(['deck', d.ask, answers, prose, d.facts, CATALOG_VERSION, COMPOSER_VERSION, COMPOSER_MODEL]))
-  return { id, question: d.ask, answers, prose, facts: d.facts }
-}
-
 export const planKey = (id: string) => `${PLAN_PREFIX}${id}`
 
 /** What the store holds for an item: its plan and when it was made, or a session's claim on making it. */

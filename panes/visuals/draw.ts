@@ -9,7 +9,7 @@
 // recommended answer, red a shortfall, amber only what waits on the person,
 // a dash only what is not live yet, and everything else grey or white.
 import { esc } from '../svg.ts'
-import { FILL, PANE, QUIET, RECOMMENDED, REST_LINE, SIGNAL_YELLOW, TEXT } from '../../hooks/signal.ts'
+import { FILL, PANE, PICTURE_LINE, QUIET, RECOMMENDED, REST_LINE, SIGNAL_YELLOW, TEXT } from '../../hooks/signal.ts'
 import { joined, TRUSTS, type Facts, type Trust } from './facts.ts'
 
 export type Picture = { source: string; width: number; height: number; alt: string }
@@ -28,11 +28,11 @@ export const cardWidth = (bodyColumns: number) => Math.round(bodyColumns * 9.75 
 
 const FONT = 'font-family="-apple-system, system-ui, sans-serif"'
 /** A line that carries meaning on the pane's ground: the darkest grey that passes 3:1. */
-const LINE = '#666664'
+export const LINE = PICTURE_LINE
 /** The smallest type a picture draws (the design review, 2026-10-23). */
-const SMALL = 11
+export const SMALL = 11
 
-const svg = (width: number, height: number, body: string, alt: string): Picture => ({
+export const svg = (width: number, height: number, body: string, alt: string): Picture => ({
   source: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${body}</svg>`,
   width,
   height,
@@ -41,7 +41,7 @@ const svg = (width: number, height: number, body: string, alt: string): Picture 
 
 type TextOpts = { size?: number; fill?: string; anchor?: 'start' | 'middle' | 'end'; halo?: boolean }
 /** Text; a halo in the tile's fill keeps a label legible where a line runs under it, with no dark edge of its own (#105's design review). */
-const t = (x: number, y: number, s: string, o: TextOpts = {}) =>
+export const t = (x: number, y: number, s: string, o: TextOpts = {}) =>
   `<text x="${x}" y="${y}" ${FONT} font-size="${o.size ?? 12}" fill="${o.fill ?? TEXT}" text-anchor="${o.anchor ?? 'start'}"${o.halo ? ` stroke="${FILL}" stroke-width="4" paint-order="stroke"` : ''}>${esc(s)}</text>`
 const box = (x: number, y: number, w: number, h: number, o: { stroke?: string; dash?: boolean } = {}) =>
   `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="6" fill="${FILL}" stroke="${o.stroke ?? REST_LINE}"${o.dash ? ' stroke-dasharray="4 3"' : ''}/>`
@@ -61,7 +61,7 @@ type F = Required<Facts>
 export const textWidth = (s: string, size = 12) => Math.ceil(s.length * size * 0.58)
 
 /** Shortens a label to fit `room` pixels, ending in an ellipsis. */
-const clip = (s: string, room: number, size = 12) => {
+export const clip = (s: string, room: number, size = 12) => {
   if (textWidth(s, size) <= room) return s
   let out = s
   while (out.length > 1 && textWidth(`${out}…`, size) > room) out = out.slice(0, -1)
@@ -774,57 +774,3 @@ export const NATIVE_VIEWS: readonly string[] = [
 
 /** Every view a composed card can draw. The sequence is drawn by Mermaid ahead of time, so no item's facts draw it yet. */
 export const DRAWN_VIEWS: ReadonlySet<string> = new Set([...Object.keys(PICTURES), ...NATIVE_VIEWS])
-
-// --- The facts an argument rests on (#110) ----------------------------------------
-
-/** The grey a bar's larger total draws in, under the white of the part it holds. */
-const TRACK = '#3a3a38'
-
-/**
- * An argument's numbers as bars, one row per label, every value printed after its row. One series is quiet bars;
- * two, where every second value is part of its first (on the card, of the times eligible), draw the second in white
- * over the first; two that are not draw as a pair of thin bars. The series name themselves above the values, each
- * in its bar's colour, so no key stands apart from the data.
- */
-/** The narrowest an argument's bars draw whole: their longest label and value, and a track worth reading between. */
-export function evidenceBarsWidth(fact: { series: string[]; rows: { label: string; values: number[] }[]; unit?: string }): number {
-  const unit = fact.unit ?? ''
-  const said = (r: { values: number[] }) => r.values.slice().reverse().map(v => withUnit(v, unit)).join(' / ')
-  return Math.max(...fact.rows.map(r => textWidth(r.label, SMALL))) + 10 + 140 + Math.max(...fact.rows.map(r => textWidth(said(r), SMALL)), textWidth(fact.series.join(' / '), SMALL)) + 8
-}
-
-export function evidenceBars(fact: { series: string[]; rows: { label: string; values: number[] }[]; unit?: string }, width: number): Picture {
-  const w = fit(width)
-  const unit = fact.unit ?? ''
-  const two = fact.series.length === 2
-  const nested = two && fact.rows.every(r => r.values[1]! <= r.values[0]!)
-  const said = (r: { values: number[] }) => (two ? `${withUnit(r.values[1]!, unit)} / ${withUnit(r.values[0]!, unit)}` : withUnit(r.values[0]!, unit))
-  const x0 = Math.min(Math.round(w * 0.35), Math.max(...fact.rows.map(r => textWidth(r.label, SMALL))) + 10)
-  const right = Math.max(...fact.rows.map(r => textWidth(said(r), SMALL)), textWidth(fact.series.join(' / '), SMALL)) + 8
-  const per = (w - x0 - right) / Math.max(1, ...fact.rows.flatMap(r => r.values))
-  const head = 18
-  const rowH = two && !nested ? 20 : 16
-  const colours = [QUIET, TEXT]
-  const legend = two
-    ? `<text x="${w}" y="12" ${FONT} font-size="${SMALL}" text-anchor="end"><tspan fill="${TEXT}">${esc(fact.series[1]!)}</tspan><tspan fill="${QUIET}"> / ${esc(fact.series[0]!)}</tspan></text>`
-    : t(w, 12, fact.series[0]!, { size: SMALL, fill: QUIET, anchor: 'end' })
-  let body = legend
-  fact.rows.forEach((r, i) => {
-    const y = head + i * rowH
-    // The data is white as a table's rows are; only the bars and the series' name are quiet (#110's fifth design review).
-    body += t(0, y + 10, clip(r.label, x0 - 8, SMALL), { size: SMALL, fill: TEXT })
-    if (nested) {
-      body += `<rect x="${x0}" y="${y + 2}" width="${r.values[0]! * per}" height="9" rx="2" fill="${TRACK}"/>`
-      body += `<rect x="${x0}" y="${y + 2}" width="${r.values[1]! * per}" height="9" rx="2" fill="${TEXT}"/>`
-    } else {
-      r.values.forEach((v, s) => {
-        body += `<rect x="${x0}" y="${y + 2 + s * 8}" width="${v * per}" height="${two ? 6 : 9}" rx="2" fill="${colours[s]}"/>`
-      })
-    }
-    // The numerator is white as its bar is, so the legend's colours hold on the numbers too (#110's design review).
-    body += two
-      ? `<text x="${w}" y="${y + 10}" ${FONT} font-size="${SMALL}" text-anchor="end"><tspan fill="${TEXT}">${esc(withUnit(r.values[1]!, unit))}</tspan><tspan fill="${QUIET}"> / ${esc(withUnit(r.values[0]!, unit))}</tspan></text>`
-      : t(w, y + 10, said(r), { size: SMALL, fill: TEXT, anchor: 'end' })
-  })
-  return svg(w, head + fact.rows.length * rowH, body, `${fact.series.join(' and ')}: ${fact.rows.map(r => `${r.label} ${said(r)}`).join(', ')}`)
-}

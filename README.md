@@ -34,12 +34,12 @@ Each Try costs a few turns of your usual usage. Nothing else in the tour sends a
 **The band**, above the prompt, one row per thing worth a glance:
 
 - **Reply row.** When a reply ends by asking you to choose, its options sit on one line, the recommended one green. Press an option to answer with it; press the headline to open the decision deck.
-- **Agent row.** What the agent is on: the task it declared with the `task` tool, or the ticket its `ticket/<n>-…` branch names. Press the title for its steps. The pill counts the issues labelled `ready-for-agent`. 📖 at the right opens the reader.
-- **Subagents row.** Every subagent this session starts: counts, then each one's model, time, tokens and what it is doing now.
+- **Agent row.** What the agent is on: the task it declared with the `task` tool, or the issue its branch names (`issue/<n>-…`). Press the title for its steps. The pill counts this repository's issues ready for an agent, then every repository's in parentheses when that differs (`2 (8)`). Press it for this repository's frontier: every ask **Waiting on you**, everything **Blocked**, the **Next** three, and the rest counted, each issue one press from its page, with **All repositories** one press away in the same pane: every repository's asks and work ready for an agent. It reads Matt Pocock's triage labels, renamed by your `docs/agents/triage-labels.md` if you have one, and counts an issue no label places rather than hiding it. 📖 at the right opens the reader.
+- **Subagents row.** Every subagent this session starts, its background tasks, and the sessions it starts in the desktop app: counts, then each one's model, time, tokens and what it is doing now. Press a session's title to open it.
 - **Session banner.** 👁️ beside 📖 shows a strip above the rows: each file this session edited, with the lines it gained and lost, linked to the decision record (ADR) in `docs/adr` or `docs/decisions` it answers to. Off until you press it.
 - **Your row.** This project's next ask, and how many wait on you across your repositories. Press it to open the queue.
 
-**The decision deck**, beside the chat: the first step a yes would start, asked as a question, then the options with the recommended one green. Under them is the evidence: a snapshot of what each option touches, and the arguments drawn from the session's own tool output, each with a chip naming where it came from. A quote that is not in its source word for word is dropped.
+**The decision deck**, beside the chat: the question, then a tab per option, opening on the recommended one. Each tab is one page with no scroll: what the option is, then diagrams that make its case (why, how it works with its terms explained, who does the work, what could go wrong and the fallback), then a button named for the option, which sends it as your reply.
 
 **The RSVP reader.** Plays the reply's gist, then optionally the whole reply, one word at a time with a red anchor letter on a fixed focal point. The transcript goes dark while it reads. Speed steps of 50 words a minute.
 
@@ -61,7 +61,7 @@ The pane binds no letter keys, so typing always goes to the chat. The asking age
 ## What it runs, reads and sends
 
 - **GitHub, through your `gh`.** Once a minute it reads the open issues labelled `ready-for-human` and `ready-for-agent` in the repositories of the account `gh` is signed in as. It posts only when you submit rulings on an issue: one comment, then it removes the label. Without `gh`, `human-queue.md` still works and the tour says what is missing.
-- **Your transcripts, locally.** The Caches pane reads Claude Code's own transcripts under `~/.claude/projects` every 15 seconds. Nothing leaves the machine.
+- **Your transcripts, locally.** The Caches pane reads Claude Code's own transcripts under `~/.claude/projects` every 15 seconds, and the desktop app's session files, which say which session started which; the subagents row reads the same to list the sessions this one started. Nothing leaves the machine.
 - **Model calls on your session's access, no API key.** When a reply asks you to choose, a Haiku call checks it really needs a decision, then a fork of the session (served from its prompt cache) writes the deck, and Haiku checks each sentence against its quotes.
 - **Your git history, locally.** For the session banner it runs `git rev-parse` and `git log` in the repository of each file an agent edits, at most every 10 minutes a repository, and reads its ADRs. Nothing leaves the machine.
 - **Keep warm sends prompts.** While a session is armed it sends a short ping when its cache is about to go cold. It spends usage; it is off until you press it.

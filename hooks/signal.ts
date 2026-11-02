@@ -12,7 +12,9 @@ export const RECOMMENDED = '#96de81'
 export const SIGNAL_BLUE = '#81b0de'
 /** You: what waits on the person. */
 export const SIGNAL_YELLOW = '#dec281'
-/** Something failed, or a no. */
+/** Landed work for the person to accept: amber's family, a step deeper, so it reads as the person's and never as an ask (the owner, 2026-11-02). */
+export const SIGNAL_GOLD = '#cba14d'
+/** Something failed, a no, or work stuck behind an open blocker. */
 export const SIGNAL_RED = '#de8481'
 
 // The desktop app's own neutrals, sampled off its window (2026-10-16), so a pane
@@ -36,3 +38,6 @@ export const MERGED = '#b796ff'
 export const INACTIVE = '#c3c2b7'
 /** The band's ground, sampled off the app: a label's halo in a picture drawn on it (ADR 0046). */
 export const BAND = '#262625'
+
+/** A line that carries meaning in a picture on the pane's ground: the darkest grey that passes 3:1 (a route's edges, a box's outline). */
+export const PICTURE_LINE = '#666664'
