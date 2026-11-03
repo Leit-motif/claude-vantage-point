@@ -2,7 +2,7 @@
 
 A heads-up display for Claude Code. It shows what your agent is doing above the prompt, lays out a decision when a reply asks you to choose, plays long replies one word at a time, tracks every warm prompt cache on your machine, and gives your agents a queue of asks you rule on with yes or no.
 
-![The band above the Claude Code desktop prompt: subagents run and finish, the reply row offers the agent's question with the recommended option green, the decision deck opens beside the chat, and picking the option sends it as the reply](media/demo.gif)
+![The reply row lights above the Claude Code prompt with the agent's question, the recommended option green; the decision deck opens with each option as a page of diagrams; pressing the option sends it as the reply](media/demo.gif)
 
 It is a Claude Code **mod**: a plugin that draws in the desktop app. It is an early preview (0.x), so its formats may still change.
 
