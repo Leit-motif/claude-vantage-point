@@ -10,7 +10,7 @@
 // signed-in gh login alone: only its Asks comments count, and only its comment
 // answers. A submit is sent by the session where the person pressed it, once
 // its undo window has passed, and by nothing else: what that session leaves
-// unsent, or may have sent, waits in the pane for the person to press R.
+// unsent, or may have sent, waits in the pane for the person to press Send, Check and send, or Retry the label.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren, RenderElement, RenderInput, RenderSurface, TurnStepChunk, TurnStepResult } from 'claude-code'
 
@@ -19,8 +19,6 @@ import { DESKTOP_CHARS_PER_CELL, shortTitle, titleRoom } from '../panes/band/tit
 import { PANEL, picture } from '../panes/reader/picture'
 import { SPEED_STEP } from '../panes/reader/reading'
 import {
-  AGENT_LABEL,
-  ASKS_LABEL,
   GhError,
   gh,
   SEARCH_CEILING,
@@ -31,10 +29,10 @@ import {
   listComments,
   parseTarget,
   postComment,
-  removeLabel,
+  moveLabel,
   sameLogin,
-  branchIssue,
   gist,
+  installedGhVersion,
   parseTicket,
   parseTicketPage,
   readyOf,
@@ -46,7 +44,10 @@ import {
   viewAsk,
   viewCard,
 } from '../panes/human-queue/issues'
-import type { Found, LabelSearch, Run, Viewed } from '../panes/human-queue/issues'
+import type { ConventionsIO, Found, LabelSearch, Run, Viewed } from '../panes/human-queue/issues'
+import { CONVENTION_FILES, resolveConventions } from '../panes/human-queue/issues'
+import { conventionsIn, conventionsKey, conventionsOf, CONVENTIONS_PREFIX, DEFAULTS, isFresh, issueOfBranch, knownOf, readRecord, recordOf, sameFiles } from '../panes/human-queue/conventions'
+import type { Conventions, Known, RepoRecord, Sources } from '../panes/human-queue/conventions'
 import { BUDGETS, noteRefusal, paced, pausedNow, readHold, refusalLine } from '../panes/human-queue/limits'
 import type { Budget, PauseIO } from '../panes/human-queue/limits'
 import { mentionsOf } from '../panes/human-queue/mentions'
@@ -79,11 +80,16 @@ import {
   rulingsComment,
   setNote,
   setRuling,
+  labelClause,
+  plainText,
   submissionText,
+  titleForAgent,
   writeFieldLine,
   writeRulingLine,
 } from '../panes/human-queue/queue'
-import type { Item, Request, Verdict } from '../panes/human-queue/queue'
+import type { Item, LabelMove, LabelOutcome, Request, Verdict } from '../panes/human-queue/queue'
+import { isTodo, todoMoves, todoOf } from '../panes/human-queue/todo'
+import { todoBodyProps, todoCard, todoFallback, type TodoCard } from './todo-card'
 import { agentPill, youPill, freshCount, freshPill, staleCount, readSpecProgress, waitingTotal, NEW_ASK_MS } from './band'
 import type { CountObservation } from './band'
 import { withoutGist, asButtons, boxlessWrapUp, callKey, decisionFromFork, decisionOfPermission, decisionOfQuestions, modeOf, projectFolder, ROW_MODES, decisionOfWrapUp, optionSends, fitFields, forkPrompt, GATE_MODEL, GATE_SYSTEM, gateText, isYes, looksLikeDecision, parseForkJson, PERSON_TOOLS, proposedCard, startedCard, WRAP_UP_TOOL, wrapUpAsk } from './deck'
@@ -96,7 +102,6 @@ import { STATE_SECTION, stateLine } from './state'
 import { childCounted, childFacts, SESSION_SHAPE, SUBAGENT_SHAPE, TASK_SHAPE, childOf, childrenOf, CHILD_STALE_MS, counts as teamCounts, detail, elapsed, ended, freshMeta, isChildRunning, isFailed, isLive, isRunning, launched, mergeListed, midTurn, modelOf, notified, ordered, orderedChildren, orderedTasks, rowFacts, ROOM, taskFacts, taskLabel, waitingOn } from './subagents'
 import type { Background, ChildSession, Subagent, SubagentMeta } from './subagents'
 import { applyCall, cardLines, doneOf, finished, linesOf, renamedPlans, stepsOfCalls, STEPS_TOOL, UPDATE_PLAN_TOOL } from './steps'
-import { RESUME_DELAY_MS, resumePath, resumePrompt } from './resume'
 import { endReader, isHeld, pacingOf, speedReader, startReader, switchLevel, toggleReader } from './reader'
 import { GIST_SECTION, splitGist } from '../panes/reader/gist'
 import type { ReaderIO } from './reader'
@@ -228,7 +233,7 @@ const cardMode = atom({ plugin: 'vantage-point', key: 'cardMode' } as const, 'na
 const paletteState = atom({ plugin: 'vantage-point', key: 'palette' } as const, PALETTE_START)
 const albumState = atom({ plugin: 'vantage-point', key: 'album' } as const, ALBUM_START)
 const gradingState = atom({ plugin: 'vantage-point', key: 'grading' } as const, { at: 0, picks: {}, prose: null, sent: false } as HumanQueueGrading)
-const tourSetup = atom({ plugin: 'vantage-point', key: 'tourSetup' } as const, { gh: 'unknown', login: null, queueFile: false } as TourSetup)
+const tourSetup = atom({ plugin: 'vantage-point', key: 'tourSetup' } as const, { platform: 'unknown', gh: 'unknown', ghVersion: null, login: null, queueFile: false } as TourSetup)
 const plans = atom({ plugin: 'vantage-point', key: 'plans' } as const, {} as Record<string, Plan>)
 const composedView = atom({ plugin: 'vantage-point', key: 'composedView' } as const, { prose: null, scopes: {}, viewing: null } as HumanQueueComposedView)
 /** The keyboard is in the native card's comment field: it is the Input; otherwise a saved comment rests as wrapped text. */
@@ -257,6 +262,8 @@ const agent = atom({ plugin: 'vantage-point', key: 'agent' } as const, null as H
 const agentBranch = atom({ plugin: 'vantage-point', key: 'agentBranch' } as const, { state: 'unknown', key: null, branch: null } as HumanQueueAgentBranch)
 const task = atom({ plugin: 'vantage-point', key: 'task' } as const, null as HumanQueueTask)
 const here = atom({ plugin: 'vantage-point', key: 'here' } as const, null as string | null)
+/** `here` under a name a render that holds its own `here` can read. */
+const sessionRepo = here
 const ready = atom({ plugin: 'vantage-point', key: 'ready' } as const, null as HumanQueueReady)
 const frontier = atom({ plugin: 'vantage-point', key: 'frontierList' } as const, { state: 'unknown' } as HumanQueueFrontier)
 const frontierRest = atom({ plugin: 'vantage-point', key: 'frontierRest' } as const, false)
@@ -392,10 +399,79 @@ async function markCount($: $, name: 'waiting' | 'ready', value: number | null):
  * other session on the machine.
  */
 function labelSearch($: $): Promise<LabelSearch> {
-  labelsLookup ??= signedIn($, false).then(owner => searchLabels(runner($), owner)).finally(() => {
+  labelsLookup ??= signedIn($, false).then(async owner => {
+    const search = await searchLabels(runner($), owner, await storedKnown($))
+    lastKnown = search.known
+    return search
+  }).finally(() => {
     labelsLookup = undefined
   })
   return labelsLookup
+}
+
+/** The person's `~/.claude/vantage-point.json`, or null when there is none (issue 146). */
+async function personFile($: $): Promise<string | null> {
+  const home = (await $.env.get('HOME').catch(() => undefined)) ?? ''
+  return home === '' ? null : $.fs.read(`${home}/.claude/vantage-point.json`).then(String, () => null)
+}
+
+/**
+ * The conventions the last label search read by: every recorded repository's,
+ * and the person's for the rest. The pane's words name the waiting label
+ * through it, since a render does not wait on the store.
+ */
+let lastKnown: Known = knownOf(new Map(), null, 0)
+
+/** Every repository's conventions a session recorded within the week, and the person's; nothing recorded when the store cannot be read. */
+async function storedKnown($: $): Promise<Known> {
+  const keys = (await $.store.keys().catch(() => [] as string[])).filter(key => key.startsWith(CONVENTIONS_PREFIX))
+  const records = await Promise.all(keys.map(async key => [key.slice(CONVENTIONS_PREFIX.length), readRecord(await $.store.get(key).catch(() => undefined))] as const))
+  return knownOf(new Map(records.flatMap(([repo, record]) => (record === null ? [] : [[repo, record] as const]))), await personFile($), await $.clock.now())
+}
+
+/** The store, the clock and the person's file, as resolving one repository's conventions calls them. */
+function conventionsIO($: $): ConventionsIO {
+  return {
+    now: () => $.clock.now(),
+    load: repo => $.store.get(conventionsKey(repo)).catch(() => undefined),
+    save: (repo, record) => $.store.set(conventionsKey(repo), record).catch(() => undefined),
+    personFile: () => personFile($),
+  }
+}
+
+/** `owner/name` of an `owner/name#n` key. */
+const repoOfKey = (key: string): string => key.slice(0, key.lastIndexOf('#'))
+
+/** The waiting label of `repo`, or of this session's repository, as the last search read it. */
+function waitingLabel(repo: string | null): string {
+  return (repo === null ? lastKnown.fallback : conventionsIn(lastKnown, repo)).roles.waiting
+}
+
+/** This session's checkout root, and the conventions files it and the person hold; null for each one not there. */
+async function localSources($: $): Promise<Sources & { root: string | null }> {
+  const ran = await $.process.run(['git', '-C', await $.session.cwd(), 'rev-parse', '--show-toplevel'], { timeoutMs: 5000 }).catch(() => null)
+  const root = ran?.exitCode === 0 ? ran.stdout.trim() : null
+  const file = (path: string) => (root === null ? Promise.resolve(null) : $.fs.read(`${root}/${path}`).then(String, () => null))
+  const [repoFile, triageFile, person] = await Promise.all([file(CONVENTION_FILES.repoFile), file(CONVENTION_FILES.triageFile), personFile($)])
+  return { root, repoFile, triageFile, personFile: person }
+}
+
+/**
+ * This session's conventions, from its checkout's files and the person's
+ * (issue 146). With `repo`, records the checkout's files under it, so every
+ * session reads that repository's issues by them; written only when they
+ * change or the record is no longer fresh, so a poll in every session does
+ * not rewrite the store each minute.
+ */
+async function localConventions($: $, repo: string | null): Promise<Conventions> {
+  const { root, repoFile, triageFile, personFile: person } = await localSources($)
+  if (root !== null && repo !== null) {
+    const now = await $.clock.now()
+    const record: RepoRecord = recordOf(repoFile, triageFile, now)
+    const held = readRecord(await $.store.get(conventionsKey(repo)).catch(() => undefined))
+    if (!(held !== null && sameFiles(held, record) && isFresh(held, now))) await $.store.set(conventionsKey(repo), record).catch(() => undefined)
+  }
+  return conventionsOf({ repoFile, triageFile, personFile: person }).conventions
 }
 
 /** Every GitHub read the band and the pane keep a minute fresh. */
@@ -544,21 +620,21 @@ function phaseLine(key: string, ask: Ask, phase: Phase): string {
   const last = error ? ` Last try: ${error}.` : ''
   switch (phase) {
     case 'window':
-      return `Submitted ${name}: it posts once the undo window has passed. Q takes it back until then.`
+      return `Submitted ${name}: it posts once the undo window has passed. Undo takes it back until then.`
     case 'posting':
       return `Posting the rulings on ${name}…`
     case 'elsewhere':
       return `${name} was submitted in another session; it posts from there.`
     case 'unsent':
-      return `Unsent ruling: R sends it.${last}`
+      return `Unsent ruling: Send posts it.${last}`
     case 'maybe':
-      return `May have posted: R checks and sends.${last}`
+      return `May have posted: Check and send looks first, then posts.${last}`
     case 'label':
-      return `Posted; ${ASKS_LABEL} is still on: R retries the label.${last}`
+      return `Posted; ${waitingLabel(repoOfKey(key))} is still on: Retry the label tries again.${last}`
     case 'done':
       return ask.submission?.label === 'kept'
-        ? `${name}: answered; ${ASKS_LABEL} stays on because the ask changed after the rulings.`
-        : `${name}: answered; ${ASKS_LABEL} is off.`
+        ? `${name}: answered; ${waitingLabel(repoOfKey(key))} stays on because the ask changed after the rulings.`
+        : `${name}: answered; ${ask.submission?.moved ? labelClause(ask.submission.moved) : `${waitingLabel(repoOfKey(key))} is off`}.`
   }
 }
 
@@ -585,22 +661,21 @@ async function openRequests($: $): Promise<Request[]> {
 const PLAIN_ASK_CHARS = 200
 
 /**
- * Only distilled decisions reach the owner: an issue needs ### items (its own
- * ## Asks) that each stand alone, and a file's plain ask must be one short line.
- * A ticket labelled ready-for-human without them is counted, never drawn. The
- * review tool refuses a leaning ask, but one written before issue 87 never met it.
+ * What the pane draws. Every issue the band counts is drawn (#147): as its
+ * decision card when its items stand alone, else as a to-do card. A file's
+ * request needs ### items that each stand alone, or a plain ask of one short
+ * line; any other is held back. The review tool refuses a leaning ask, but one
+ * written before issue 87 never met it.
  */
 function isDistilled(request: Request): boolean {
+  if (request.issue !== undefined) return true
   if (request.items.length > 0) return contextGaps(request).length === 0
-  return request.issue === undefined && request.body.trim().length <= PLAIN_ASK_CHARS
+  return request.body.trim().length <= PLAIN_ASK_CHARS
 }
 
-/** Asks held back because nobody has distilled them into decisions yet. */
+/** The file's requests held back because nobody has distilled them into decisions yet. */
 async function undistilledCount($: $): Promise<number> {
-  const held = await read($, asks)
-  const waiting = Object.values(held).filter(ask => isWaiting(ask)).flatMap(ask => issueRequest(ask.issue, ask.text) ?? [])
-  const fromFile = parse(await read($, text)).requests.filter(r => r.isOpen)
-  return [...fromFile, ...waiting].filter(r => !isDistilled(r)).length
+  return parse(await read($, text)).requests.filter(r => r.isOpen && !isDistilled(r)).length
 }
 
 /** The phase of an issue request the pane shows, when it is submitted; null otherwise. */
@@ -660,12 +735,17 @@ async function readerGist($: $): Promise<boolean> {
 
 /**
  * Reads this project's frontier into `frontier` (issue 115): every open issue, placed through
- * the label map, which the repo's docs/agents/triage-labels.md renames when it has one.
- * A failed read says why; it never stands in an empty frontier.
+ * the label map the repository's conventions make (issue 146). A failed read says why; it
+ * never stands in an empty frontier.
  */
 async function readFrontier($: $): Promise<void> {
   const repo = await read($, here)
   if (repo === null) return
+  const conventions = await localConventions($, repo)
+  if (conventions.tracker !== 'github') {
+    await update($, frontier, () => ({ state: 'failed' as const, reason: `${repo} keeps its issues on ${conventions.tracker}, which Vantage Point does not read` }))
+    return
+  }
   let issues
   try {
     await signedIn($, false)
@@ -674,9 +754,7 @@ async function readFrontier($: $): Promise<void> {
     await update($, frontier, () => ({ state: 'failed' as const, reason: `could not read ${repo}'s issues (${error instanceof Error ? error.message : String(error)})` }))
     return
   }
-  const root = await $.process.run(['git', '-C', await $.session.cwd(), 'rev-parse', '--show-toplevel'], { timeoutMs: 5000 }).catch(() => null)
-  const triage = root?.exitCode === 0 ? await $.fs.read(`${root.stdout.trim()}/docs/agents/triage-labels.md`).then(String, () => null) : null
-  const found = frontierOf(issues, labelMap(triage))
+  const found = frontierOf(issues, labelMap(conventions))
   const held = await read($, frontier)
   if (held.state === 'read' && held.repo === repo && JSON.stringify(held.frontier) === JSON.stringify(found)) return
   await update($, frontier, () => ({ state: 'read' as const, repo, frontier: found }))
@@ -787,21 +865,6 @@ async function changeWarmth($: $, sessionId: string, change: (w: Warmth) => Warm
 async function toggleWarmth($: $, sessionId: string): Promise<void> {
   const now = await $.clock.now()
   await changeWarmth($, sessionId, w => toggled(w, now))
-}
-
-/**
- * The desktop restarted at this session's own ask (scripts/desktop-restart.sh --resume): its note becomes
- * the next prompt, so the work carries on without the person. The note goes first, so a reload cannot send it twice.
- */
-async function resumeAfterRestart($: $): Promise<void> {
-  const path = resumePath((await $.env.get('HOME')) ?? '', await $.session.id())
-  if (!(await $.fs.exists(path))) return
-  const note = await $.fs.read(path)
-  await $.process.run(['rm', '-f', path], { timeoutMs: 5000 })
-  const text = resumePrompt(note)
-  if (text === null) return
-  const entered = await $.prompt.submit({ text }).catch(() => null)
-  if (entered === null || entered.drop !== undefined) await $.fs.write(path, note)
 }
 
 /** Sets the timer for this session's next ping, or none. */
@@ -971,14 +1034,25 @@ async function sendTour($: $, prompt: string, readsNext: boolean): Promise<void>
   await $.prompt.submit({ text: prompt, asUser: true })
 }
 
-/** Reads what the tour's setup lines say: gh and its login, and this folder's human-queue.md. */
+/** A file every macOS has and no other system does: Claude Code's mod API names no platform, so this is how the tour tells. */
+const MACOS_MARKER = '/System/Library/CoreServices/SystemVersion.plist'
+
+/** Reads what the tour's setup lines say: the system, gh with its version and login, and this folder's human-queue.md. */
 async function readTourSetup($: $): Promise<void> {
+  const platform = (await $.fs.exists(MACOS_MARKER).catch(() => false)) ? 'macos' : 'other'
   const queueFile = await $.fs.exists(await filePath($)).catch(() => false)
+  // `gh --version` asks GitHub nothing, so it skips the limits' pacing.
+  const ghVersion = await installedGhVersion((argv, init) => $.process.run(argv, init)).catch(() => null)
+  const sources = await localSources($)
+  const conventions = {
+    files: (['repo', 'triage', 'person'] as const).filter(one => sources[`${one}File`] !== null),
+    problems: conventionsOf(sources).problems,
+  }
   let next: TourSetup
   try {
-    next = { gh: 'signed-in', login: await signedIn($, true), queueFile }
+    next = { platform, gh: 'signed-in', ghVersion, login: await signedIn($, true), queueFile, conventions }
   } catch (error) {
-    next = { gh: error instanceof GhError && error.message.startsWith('gh could not run') ? 'missing' : 'signed-out', login: null, queueFile }
+    next = { platform, gh: error instanceof GhError && error.message.startsWith('gh could not run') ? 'missing' : 'signed-out', ghVersion, login: null, queueFile, conventions }
   }
   await update($, tourSetup, () => next)
 }
@@ -1240,9 +1314,11 @@ async function signedIn($: $, fresh: boolean): Promise<string> {
   }
 }
 
-/** An issue read as a request: its Asks comments count only from the signed-in login. */
+/** An issue read as a request, with what its to-do card draws: its body, its Asks comments and its brief count only from the signed-in login. */
 function readAsk(viewed: Viewed, self: string | null): HumanQueueIssue {
-  return issueAsk(viewed, author => sameLogin(author, self))
+  const trusted = (author: string) => sameLogin(author, self)
+  const issue = issueAsk(viewed, trusted)
+  return { ...issue, meta: { ...issue.meta, todo: todoOf(viewed, { body: issue.trusted, comments: trusted }) } }
 }
 
 /**
@@ -1331,19 +1407,20 @@ async function readAgent($: $): Promise<void> {
   try {
     const cwd = await $.session.cwd()
     const head = await $.process.run(['git', '-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 5000 })
-    const found = head.exitCode === 0 ? branchIssue(head.stdout) : null
+    const remote = await $.process.run(['git', '-C', cwd, 'remote', 'get-url', 'origin'], { timeoutMs: 5000 })
+    const repo = remote.exitCode === 0 ? repoOfRemote(remote.stdout) : null
+    const conventions = await localConventions($, repo)
+    const found = head.exitCode === 0 ? issueOfBranch(head.stdout, conventions.branches) : null
     source = { state: head.exitCode !== 0 ? 'unknown' : found === null ? 'none' : 'ticket', key: null, branch: head.exitCode === 0 ? head.stdout.trim() : null }
     if (epoch !== agentReadEpoch) return
     await update($, agentBranch, held => epoch === agentReadEpoch ? source : held)
-    const remote = await $.process.run(['git', '-C', cwd, 'remote', 'get-url', 'origin'], { timeoutMs: 5000 })
-    const repo = remote.exitCode === 0 ? repoOfRemote(remote.stdout) : null
     repoHere = repo
     if (found !== null && repo !== null) source = { ...source, state: 'ticket', key: `${repo}#${found.number}` }
     if (epoch !== agentReadEpoch) return
     await update($, agentBranch, held => epoch === agentReadEpoch ? source : held)
-    if (found !== null && repo !== null) {
+    if (found !== null && repo !== null && conventions.tracker === 'github') {
       const owner = await signedIn($, false)
-      next = parseTicket(await gh(runner($), ticketArgs(repo, found.number)), repo, found.kind)
+      next = parseTicket(await gh(runner($), ticketArgs(repo, found.number)), repo, found.kind, conventions, owner)
       if (found.kind === 'spec') {
         const progress = await readSpecProgress(runner($), repo, found.number, owner).catch(() => null)
         if (progress !== null) next.progress = { closed: progress.closed, total: progress.total }
@@ -1361,12 +1438,12 @@ async function readAgent($: $): Promise<void> {
 
 async function readIssues($: $): Promise<void> {
   const run = runner($)
-  let search: { found: Found[]; isCapped: boolean }
+  let search: { found: Found[]; isCapped: boolean; known: Known }
   let owner: string
   try {
     owner = await signedIn($, false)
     const labelled = await labelSearch($)
-    search = { found: asksOf(labelled), isCapped: labelled.isCapped }
+    search = { found: asksOf(labelled), isCapped: labelled.isCapped, known: labelled.known }
   } catch (error) {
     if (!(error instanceof GhError)) throw error
     await update($, github, () => error.message)
@@ -1386,7 +1463,7 @@ async function readIssues($: $): Promise<void> {
       return undefined
     }
     try {
-      return await viewAsk(run, repo, number, owner)
+      return await viewAsk(run, repo, number, owner, conventionsIn(search.known, repo))
     } catch (error) {
       if (!(error instanceof GhError)) throw error
       problems.push(error.message)
@@ -1408,6 +1485,7 @@ async function readIssues($: $): Promise<void> {
     async ({ hit, at }) => {
       const key = issueKey(hit.repo, hit.number)
       const previous = held[key]
+      // A draft saved before issue 149 has no `trusted`: it is read again, so a stranger's body loses its items.
       const isSettled =
         previous !== undefined &&
         ((previous.submission !== null && previous.doneAt === null) ||
@@ -1415,7 +1493,8 @@ async function readIssues($: $): Promise<void> {
             previous.submission?.label !== 'kept' &&
             started - previous.doneAt < HIDE_MS &&
             previous.issue.updatedAt === hit.updatedAt) ||
-          (previous.submission === null && previous.issue.updatedAt === hit.updatedAt))
+          // An ask held from before the author's trust or the to-do card is read once more (#149, #147).
+          (previous.submission === null && previous.issue.updatedAt === hit.updatedAt && typeof previous.issue.trusted === 'boolean' && previous.issue.meta.todo !== undefined))
       if (isSettled) return
       const viewed = await look(hit.repo, hit.number)
       if (viewed === undefined) {
@@ -1786,18 +1865,20 @@ async function rule($: $, verdict: Verdict): Promise<void> {
   if (request === undefined) return
   // A key for the other kind's answers (1 on a decision, W on a pair) does nothing but say which keys rule here.
   if (item !== undefined && !VERDICTS[item.kind].includes(verdict)) {
-    $.ui.toast(item.kind === 'pair' ? 'This item is A, Same or B: X, C or V.' : 'This item is yes or no: W or S.')
+    $.ui.toast(item.kind === 'pair' ? 'This item is ruled A, Same or B.' : 'This item is ruled Yes or No.')
     return
   }
   if (item === undefined && verdict !== 'yes' && verdict !== 'no') return
-  if (WAITS_FOR_R.has(await phaseOfRequest($, request))) {
-    $.ui.toast(`${label(request)} is already submitted: R ${verdict === 'yes' ? 'sends it' : 'sends it, or take it back'}.`)
+  const waiting = await phaseOfRequest($, request)
+  if (WAITS_FOR_R.has(waiting)) {
+    const button = waiting === 'label' ? 'Retry the label' : waiting === 'maybe' ? 'Check and send' : 'Send'
+    $.ui.toast(`${label(request)} is already submitted: ${button} on its page finishes it${waiting === 'unsent' ? ', or Take back returns it' : ''}.`)
     return
   }
   if (item === undefined && request.items.length > 0) return step($, 1)
   if (item === undefined) {
     if (verdict === 'yes') await submit($)
-    else $.ui.toast('A plain ask has no yes or no: W marks it done.')
+    else $.ui.toast('A plain ask has no yes or no: Done marks it done.')
     return
   }
   if (!(await writeRuling($, { request: qidOf(request), item: index, heading: item.heading }, { verdict }))) return
@@ -1806,6 +1887,7 @@ async function rule($: $, verdict: Verdict): Promise<void> {
 
 /** Writes one side of an undo entry: its `before` lines for Q, its `after` lines for E. */
 async function replay($: $, entry: HumanQueueUndo, side: 'before' | 'after'): Promise<boolean> {
+  if (entry.kind === 'todo') return moveTodo($, sourceOf(entry.request).id, entry.move, side === 'before')
   if (entry.kind === 'ruling') {
     const ok = await mutate($, entry.request, (body, id) => writeRulingLine(body, id, entry.item, entry[side], entry.heading))
     if (ok) await show($, entry.request, entry.item)
@@ -1870,6 +1952,87 @@ async function step($: $, delta: number): Promise<void> {
 function canSubmit(request: Request, index: number): boolean {
   const tally = counts(request)
   return tally.total === 0 || index >= tally.total || tally.unruled === 0
+}
+
+/** A to-do card has no rulings: on one, only its own two presses act, and Undo and Redo (#147). */
+async function onTodo($: $): Promise<boolean> {
+  const { request } = await current($)
+  return request !== undefined && isTodo(request)
+}
+
+/** What a to-do move says, done or failed, and what its undo says, in the repository's labels. */
+const TODO_SAID = {
+  agent: {
+    done: (name: string, roles: Conventions['roles']) => `Handed ${name} to an agent: ${roles.ready} on, ${roles.waiting} off. Undo takes it back.`,
+    back: (name: string, roles: Conventions['roles']) => `${name} waits on you again: ${roles.waiting} on, ${roles.ready} off.`,
+    failed: (name: string) => `Could not hand ${name} to an agent`,
+    failedBack: (name: string) => `Could not take ${name} back`,
+  },
+  done: {
+    done: (name: string) => `Closed ${name}. Undo reopens it.`,
+    back: (name: string) => `Reopened ${name}.`,
+    failed: (name: string) => `Could not close ${name}`,
+    failedBack: (name: string) => `Could not reopen ${name}`,
+  },
+}
+
+/**
+ * Moves a to-do card's issue (#147), or moves it back (`back`, Undo): Hand to
+ * agent swaps its waiting label for its ready one, Done closes it. The card
+ * leaves the pane at once, as an answered ask does, and an undo brings it back,
+ * read straight from GitHub if a poll dropped it meanwhile.
+ */
+async function moveTodo($: $, key: string, move: 'agent' | 'done', back = false): Promise<boolean> {
+  const target = parseTarget(key)
+  if (target === null) return false
+  const run = runner($)
+  const said = TODO_SAID[move]
+  const failed = (back ? said.failedBack : said.failed)(shortKey(key))
+  // The card's key was captured under whoever was signed in then: move nothing outside the signed-in login's own repositories, as submit does (spec 145).
+  let self: string
+  try {
+    self = await signedIn($, true)
+  } catch (error) {
+    if (!(error instanceof GhError)) throw error
+    $.ui.toast(`${failed}: could not tell who gh is signed in as (${error.message})`)
+    return false
+  }
+  if (!isOwned(target.repo, self)) {
+    $.ui.toast(`${failed}: gh is signed in as ${self}, which does not own ${target.repo}.`)
+    return false
+  }
+  let conventions: Conventions
+  try {
+    conventions = (await resolveConventions(run, target.repo, conventionsIO($))).conventions
+  } catch (error) {
+    if (!(error instanceof GhError)) throw error
+    $.ui.toast(`${failed}: could not read ${target.repo}'s conventions (${error.message})`)
+    return false
+  }
+  const moves = todoMoves(run, conventions)
+  try {
+    if (move === 'agent') await (back ? moves.takeBack : moves.handToAgent)(target.repo, target.number)
+    else await (back ? moves.reopen : moves.close)(target.repo, target.number)
+  } catch (error) {
+    if (!(error instanceof GhError)) throw error
+    $.ui.toast(`${failed}: ${error.message}`)
+    return false
+  }
+  const now = await $.clock.now()
+  const { ask } = await patchAsk($, key, held => (held === undefined ? undefined : { ...held, doneAt: back ? null : now }))
+  if (back && ask === undefined) await askFor($, key)
+  $.ui.toast((back ? said.back : said.done)(shortKey(key), conventions.roles))
+  if (back) await showRequest($, ISSUE_ID + key)
+  else await showPlate($)
+  return true
+}
+
+/** A to-do card's press: the move, which Undo takes back. */
+async function pressTodo($: $, key: string, move: 'agent' | 'done'): Promise<void> {
+  if (!(await moveTodo($, key, move))) return
+  const request = ISSUE_ID + key
+  await update($, undoStack, list => [...list.filter(entry => entry.request !== request).slice(-49), { kind: 'todo' as const, request, move }])
+  await update($, redoStack, () => [])
 }
 
 // --- Submitting --------------------------------------------------------------------
@@ -1976,7 +2139,7 @@ async function submitIssue($: $, key: string, date: string): Promise<string | nu
   if (ask === undefined || ask === null || ask.submission === null) return null
   if (!saved) {
     await patchAsk($, key, held => (held?.submission?.id === id ? { ...held, text: reopened(held.text, key), submission: null } : undefined))
-    $.ui.toast(`Nothing will be posted on ${shortKey(key)}: the submit could not be saved to disk. Your rulings are kept; R submits again.`)
+    $.ui.toast(`Nothing will be posted on ${shortKey(key)}: the submit could not be saved to disk. Your rulings are kept; ⏎ submits them again.`)
     return null
   }
   const qid = ISSUE_ID + key
@@ -2001,7 +2164,7 @@ async function takeBack($: $, key: string): Promise<boolean> {
     return false
   }
   if (sending.has(key) || !(s.state === 'unsent' || (s.state === 'waiting' && (s.session === SESSION || phaseOf(key, ask, await $.clock.now()) === 'unsent')))) {
-    $.ui.toast(`${shortKey(key)} is posting or may have posted, so it can no longer be taken back. R checks where it stands.`)
+    $.ui.toast(`${shortKey(key)} is posting or may have posted, so it can no longer be taken back. Check and send finds out where it stands.`)
     return false
   }
   pending.get(qid)?.cancel()
@@ -2084,7 +2247,7 @@ async function send($: $, key: string, how: 'window' | 'r'): Promise<void> {
  * ruled; the issue's comments are checked for this submission first; the
  * issue is read again right before the POST (open, labelled, the same ask),
  * and the POST is made once. A POST that fails or goes unanswered may have
- * landed: R checks again later and posts only once nothing has shown up for
+ * landed: Check and send looks again later and posts only once nothing has shown up for
  * a while. The label comes off only while the issue still asks what was
  * answered. The asking agent hears right after, from this session only.
  */
@@ -2105,7 +2268,7 @@ async function sendOnce($: $, key: string, how: 'window' | 'r'): Promise<void> {
   const run = runner($)
   const unsent = async (why: string) => {
     await patchSubmission($, key, s.id, sub => ({ ...sub, state: sub.state === 'waiting' ? 'unsent' : sub.state, error: why }))
-    $.ui.toast(`Nothing was sent on ${name}: ${why}. R sends it.`)
+    $.ui.toast(`Nothing was sent on ${name}: ${why}. Send posts it.`)
   }
 
   let self: string
@@ -2117,6 +2280,13 @@ async function sendOnce($: $, key: string, how: 'window' | 'r'): Promise<void> {
   }
   if (!sameLogin(self, s.login)) return unsent(`gh is signed in as ${self}, but these rulings were made as ${s.login}; sign back in as ${s.login}, or take them back`)
   if (!isOwned(target.repo, self)) return dropAsk($, key, `${s.target} is not one of ${self}'s issues, so nothing was posted.`)
+  let conventions: Conventions
+  try {
+    conventions = (await resolveConventions(run, target.repo, conventionsIO($))).conventions
+  } catch (error) {
+    if (!(error instanceof GhError)) throw error
+    return unsent(`could not read ${target.repo}'s conventions (${error.message})`)
+  }
 
   let commentUrl = s.commentUrl
   if (s.state !== 'posted') {
@@ -2130,12 +2300,12 @@ async function sendOnce($: $, key: string, how: 'window' | 'r'): Promise<void> {
     if (found === null) {
       const now = await $.clock.now()
       if ((s.state === 'ambiguous' || s.state === 'sending') && now - (s.triedAt ?? 0) < SETTLE_MS) {
-        $.ui.toast(`${name} may have posted, but no comment is visible yet. Press R again in a few minutes; it never posts twice.`)
+        $.ui.toast(`${name} may have posted, but no comment is visible yet. Press Check and send again in a few minutes; it never posts twice.`)
         return
       }
       let viewed: Viewed
       try {
-        viewed = await viewAsk(run, target.repo, target.number, self)
+        viewed = await viewAsk(run, target.repo, target.number, self, conventions)
       } catch (error) {
         if (!(error instanceof GhError)) throw error
         return unsent(`could not read the issue (${error.message})`)
@@ -2145,7 +2315,7 @@ async function sendOnce($: $, key: string, how: 'window' | 'r'): Promise<void> {
       if (askRevision(readAsk(viewed, self)) !== s.revision) return reopenChanged($, key, readAsk(viewed, self))
       const marked = await patchSubmission($, key, s.id, sub => (sub.state === s.state ? { ...sub, state: 'sending', triedAt: now, error: null } : undefined))
       if (marked.submission?.state !== 'sending' || !marked.saved) {
-        $.ui.toast(`Nothing was sent on ${name}: its submit could not be recorded as sending. Look again before pressing R.`)
+        $.ui.toast(`Nothing was sent on ${name}: its submit could not be recorded as sending. Look again before sending.`)
         return
       }
       try {
@@ -2153,7 +2323,7 @@ async function sendOnce($: $, key: string, how: 'window' | 'r'): Promise<void> {
       } catch (error) {
         if (!(error instanceof GhError)) throw error
         await patchSubmission($, key, s.id, sub => ({ ...sub, state: 'ambiguous', error: error.message }))
-        $.ui.toast(`${name} may have posted: ${error.message}. R checks and sends; it never posts twice.`)
+        $.ui.toast(`${name} may have posted: ${error.message}. Check and send looks first, then posts; it never posts twice.`)
         return
       }
     }
@@ -2161,33 +2331,43 @@ async function sendOnce($: $, key: string, how: 'window' | 'r'): Promise<void> {
     await patchSubmission($, key, s.id, sub => ({ ...sub, state: 'posted', commentUrl: found, error: null }))
   }
 
-  // The label comes off only while the issue still asks what was answered.
-  let labelState: 'pending' | 'removed' | 'kept' = 'pending'
+  // The label moves only while the issue still asks what was answered.
+  const waiting = conventions.roles.waiting
+  let outcome: LabelOutcome | null = null
+  let moved: LabelMove | undefined
   let why: string | null = null
+  let heard: string | null = null
   try {
-    const viewed = await viewAsk(run, target.repo, target.number, self)
-    if (!viewed.isLabelled) labelState = 'removed'
+    const viewed = await viewAsk(run, target.repo, target.number, self, conventions)
+    if (!viewed.isLabelled) outcome = { kind: 'remove', waiting, missing: null }
     else if (askRevision(readAsk(viewed, self)) !== s.revision) {
-      labelState = 'kept'
       why = 'the ask changed after these rulings, so the label stays for the new round'
+      outcome = { kind: 'kept', waiting, why }
     } else {
-      await removeLabel(run, target.repo, target.number)
-      labelState = 'removed'
+      moved = await moveLabel(run, target.repo, target.number, conventions)
+      outcome = moved
     }
   } catch (error) {
     if (!(error instanceof GhError)) throw error
-    why = `${error.message}; R in the pane retries it`
+    why = `${error.message}; Retry the label in the pane tries again`
+    // The agent's hand-back hears gh's error text cleaned, cut and quoted, as gh's words, not the mod's (spec 145); the pane shows it plain.
+    heard = `gh said ${JSON.stringify(plainText(error.message).replace(/\s+/g, ' ').trim().slice(0, 200))}; Retry the label in the pane tries again`
   }
-  const doneAt = labelState === 'pending' ? null : await $.clock.now()
+  const labelState = outcome === null ? 'pending' : outcome.kind === 'kept' ? 'kept' : 'removed'
+  const doneAt = outcome === null ? null : await $.clock.now()
   await patchAsk($, key, a =>
-    a?.submission?.id === s.id ? { ...a, submission: { ...a.submission, label: labelState, error: labelState === 'pending' ? why : null }, doneAt } : undefined,
+    a?.submission?.id === s.id
+      ? { ...a, submission: { ...a.submission, label: labelState, moved, error: outcome === null ? why : null }, doneAt }
+      : undefined,
   )
   $.ui.toast(
-    labelState === 'removed'
-      ? `Posted the rulings on ${name}.`
-      : labelState === 'kept'
-        ? `Posted the rulings on ${name}; ${ASKS_LABEL} stays on because the ask changed.`
-        : `Posted the rulings on ${name}, but ${ASKS_LABEL} is still on: ${why}`,
+    outcome === null
+      ? `Posted the rulings on ${name}, but ${waiting} is still on: ${why}`
+      : outcome.kind === 'kept'
+        ? `Posted the rulings on ${name}; ${waiting} stays on because the ask changed.`
+        : moved !== undefined && (moved.kind === 'swap' || moved.missing !== null)
+          ? `Posted the rulings on ${name}; ${labelClause(moved)}.`
+          : `Posted the rulings on ${name}.`,
   )
   if (doneAt !== null) await forget($, qid)
 
@@ -2197,7 +2377,7 @@ async function sendOnce($: $, key: string, how: 'window' | 'r'): Promise<void> {
     const request = issueRequest(held.issue, held.text)
     if (request !== undefined) {
       const delivery = { id: s.id, target: s.target, comment: commentUrl, labelRemoved: labelState === 'removed' }
-      const dropped = await handOver($, name, submissionText(request, held.issue.meta.url, delivery, why))
+      const dropped = await handOver($, name, submissionText(request, held.issue.meta.url, delivery, outcome ?? { kind: 'kept', waiting, why: heard ?? why }))
       if (dropped !== null) $.ui.toast(`The agent did not get the rulings on ${name} (${dropped}); it can read them in the comment.`)
     }
   }
@@ -2232,7 +2412,7 @@ async function submit($: $): Promise<void> {
     ])
     await update($, redoStack, () => [])
     await update($, capture, () => null)
-    $.ui.toast(`Submitted ${shortKey(request.id)}. Q takes it back before it posts.`)
+    $.ui.toast(`Submitted ${shortKey(request.id)}. Undo takes it back before it posts.`)
     await showPlate($)
     return
   }
@@ -2250,7 +2430,7 @@ async function submit($: $): Promise<void> {
   await update($, redoStack, () => [])
   await update($, capture, () => null)
   await handBack($, qid)
-  $.ui.toast(`Submitted ${request.id} ${request.title}. Q takes it back.`)
+  $.ui.toast(`Submitted ${request.id} ${request.title}. Undo takes it back.`)
   await showPlate($)
 }
 
@@ -2295,6 +2475,7 @@ async function act($: $, action: Action, surface: RenderSurface, from: 'button' 
   const now = await $.clock.now()
   if (action === lastAct.key && from !== lastAct.from && now - lastAct.at < REPEAT_GAP_MS) return
   lastAct = { key: action, at: now, from }
+  if (action !== 'undo' && action !== 'redo' && (await onTodo($))) return
   if (isVerdict(action)) return rule($, action)
   switch (action) {
     case 'prev':
@@ -2358,6 +2539,7 @@ async function pressNative($: $, action: Action, surface: RenderSurface, from: '
   const now = await $.clock.now()
   if (action === lastAct.key && from !== lastAct.from && now - lastAct.at < REPEAT_GAP_MS) return
   lastAct = { key: action, at: now, from }
+  if (action !== 'undo' && action !== 'redo' && (await onTodo($))) return
   if (action === 'undo' || action === 'redo' || action === 'comment') return act($, action, surface, from)
   if (!(await flushDraft($))) return
   await setCommentOpen($, false)
@@ -2391,13 +2573,15 @@ async function askFor($: $, wanted: string): Promise<Request | string | undefine
     if (phase !== null && !(phase === 'done' && now - (known.doneAt ?? 0) >= HIDE_MS)) return `${key} was just answered in the pane.`
   }
   let viewed: Viewed
+  let conventions: Conventions
   try {
-    viewed = await viewAsk(runner($), ref.repo, ref.number, owner)
+    conventions = (await resolveConventions(runner($), ref.repo, conventionsIO($))).conventions
+    viewed = await viewAsk(runner($), ref.repo, ref.number, owner, conventions)
   } catch (error) {
     if (!(error instanceof GhError)) throw error
     return `Could not read ${key} with gh: ${error.message}`
   }
-  if (!viewed.isOpen || !viewed.isLabelled) return `${key} is not an open issue labelled ${ASKS_LABEL}. Label it first (see the vantage-point:ask skill).`
+  if (!viewed.isOpen || !viewed.isLabelled) return `${key} is not an open issue labelled ${conventions.roles.waiting}. Label it first (see the vantage-point:ask skill).`
   const issue = readAsk(viewed, login)
   const { ask } = await patchAsk($, issue.key, held => refreshed(held, issue, now))
   const kept = ask ?? (await read($, asks))[issue.key]
@@ -2411,19 +2595,21 @@ async function summary($: $, open: Request[], problem: string | null): Promise<s
     const phase = await phaseOfRequest($, request)
     const size =
       phase === 'unsent'
-        ? 'unsent ruling: R sends it'
+        ? 'unsent ruling: Send posts it'
         : phase === 'maybe'
-          ? 'may have posted: R checks and sends'
+          ? 'may have posted: Check and send'
           : phase === 'label'
-            ? 'posted, label still on: R retries it'
+            ? 'posted, label still on: Retry the label'
             : request.items.length === 0
               ? 'plain ask'
               : `${request.items.length} items`
-    lines.push(`· ${label(request)} (${size})`)
+    // The text enters the conversation, so an issue is named as the agent may hear it (issue 149).
+    lines.push(`· ${request.issue === undefined ? label(request) : `${shortKey(request.id)} ${titleForAgent(request)}`} (${size})`)
   }
   if (open.length > PAGE_SIZE) lines.push(`· and ${open.length - PAGE_SIZE} more (0 turns the page in the pane)`)
-  if (!hasScanned) lines.push(`Reading issues labelled ${ASKS_LABEL} in the background; the pane shows them as they arrive.`)
-  if (problem !== null) lines.push(`Issues labelled ${ASKS_LABEL} could not all be read: ${problem}`)
+  const waiting = waitingLabel(await read($, here))
+  if (!hasScanned) lines.push(`Reading issues labelled ${waiting} in the background; the pane shows them as they arrive.`)
+  if (problem !== null) lines.push(`Issues labelled ${waiting} could not all be read: ${problem}`)
   return lines.join('\n')
 }
 
@@ -2492,7 +2678,7 @@ async function haiku($: $, system: string, prompt: string, maxTokens: number): P
   return r.isAnswered ? r.text : null
 }
 
-/** Regex passed: gate, fork, fit, check, then show. Anything that fails shows nothing. */
+/** Regex passed: gate, fork, fit, then show. Anything that fails shows nothing. */
 /** How often a decision that recommends a session card looks for the card's session (#67). */
 const CARD_POLL_MS = 3000
 
@@ -2694,6 +2880,11 @@ function bannerIO($: $): BannerIO {
     list: async dir => ((await $.fs.exists(dir)) ? (await $.fs.list(dir)).filter(entry => entry.kind === 'file').map(entry => entry.name) : null),
     read: async path => String(await $.fs.read(path)),
     now: () => $.clock.now(),
+    adrDirs: async root => {
+      const file = (path: string) => $.fs.read(`${root}/${path}`).then(String, () => null)
+      const [repoFile, triageFile, person] = await Promise.all([file(CONVENTION_FILES.repoFile), file(CONVENTION_FILES.triageFile), personFile($)])
+      return conventionsOf({ repoFile, triageFile, personFile: person }).conventions.adrDirs
+    },
   }
 }
 
@@ -2770,12 +2961,11 @@ export const register: Register = (on, _options) => {
     if ((await $.ui.panes().catch(() => [])).some(pane => pane.id === 'human-queue-ready')) await $.ui.close({ id: 'human-queue-ready' }).catch(() => undefined)
     watchSubagents($)
     $.clock.every(CARD_POLL_MS, () => void watchCards($).catch(() => undefined))
-    $.clock.after(RESUME_DELAY_MS, () => void resumeAfterRestart($).catch(() => undefined))
     await $.tool.register({
       name: 'review',
       description:
         'Open the human-queue pane so the person can rule on a request: one you wrote to human-queue.md, ' +
-        `or an issue you filed with the ${ASKS_LABEL} label in one of the signed-in gh account's repositories (see the vantage-point:ask skill for both). ` +
+        `or an issue you filed with its repository's waiting label (${DEFAULTS.roles.waiting} unless its conventions rename it) in one of the signed-in gh account's repositories (see the vantage-point:ask skill for both). ` +
         'Returns at once; when the person submits, their rulings arrive as a new message with a JSON payload. They stay in ' +
         'human-queue.md, or post as one comment on the issue, which then loses the label.',
       inputSchema: {
@@ -2858,7 +3048,7 @@ export const register: Register = (on, _options) => {
     await $.command
       .register({
         name: 'vantage-point',
-        description: `Open the human queue: rule on what agents left in human-queue.md and in issues labelled ${ASKS_LABEL}`,
+        description: `Open the human queue: rule on what agents left in human-queue.md and in issues labelled as waiting on you (${DEFAULTS.roles.waiting} by default)`,
       })
       .catch(error => $.ui.toast(`vantage-point: /vantage-point could not be registered: ${String(error)}`))
     // A fresh install says once, on this machine, where to start.
@@ -2888,8 +3078,8 @@ export const register: Register = (on, _options) => {
   // A turn may switch branches or move into a worktree: read the ticket again.
   // The decision stays through the reply and a plugin reload; the next turn and /clear clear it.
   // The deck fills itself too (issue #14): a regex on the reply or a wrap-up ask (issue #21), a Haiku gate, a
-  // tool-less fork that writes the deck, then the quote and support checks. The
-  // band shows nothing new until the deck has passed them. A question the agent asked this turn
+  // tool-less fork that writes the deck, then a Haiku pass that shortens a field past its room. The
+  // band shows nothing new until the deck is filled. A question the agent asked this turn
   // keeps the row: the reply and its wrap-up box only restate it.
   on('turn.complete', async ($, e, next) => {
     // A Keep warm ping's turn leaves the band as it was, and one that missed the cache stops the
@@ -3263,9 +3453,9 @@ export const register: Register = (on, _options) => {
       return {
         deny:
           body === '' && open.length === 0
-            ? `There is no ${FILE} at the project root yet, and no open issue labelled ${ASKS_LABEL}. Write the request first (see the vantage-point:ask skill).`
+            ? `There is no ${FILE} at the project root yet, and no open issue labelled ${waitingLabel(await read($, here))}. Write the request first (see the vantage-point:ask skill).`
             : wanted === null
-              ? `Nothing is open: ${FILE} has no open request, and no issue labelled ${ASKS_LABEL} is open.`
+              ? `Nothing is open: ${FILE} has no open request, and no issue labelled ${waitingLabel(await read($, here))} is open.`
               : `${FILE} has no open request ${wanted}. Open ones: ${open.map(r => r.id).join(', ') || 'none'}.`,
       }
     }
@@ -3284,7 +3474,7 @@ export const register: Register = (on, _options) => {
     await markQueueSeen($)
     const opened = await $.ui.open({ id: PANE, title: 'Human queue', focus: true })
     openedPane($)
-    const size = request.items.length === 0 ? 'a plain ask' : `${request.items.length} items`
+    const size = isTodo(request) ? 'a to-do' : request.items.length === 0 ? 'a plain ask' : `${request.items.length} items`
     const where = opened.isPlaced
       ? 'Opened the human-queue pane on'
       : 'Queued, but Claude Code did not place the pane on screen (its window is narrow, or no attached app places panes). Tell the person to run /vantage-point to rule on'
@@ -3292,7 +3482,7 @@ export const register: Register = (on, _options) => {
       request.issue === undefined
         ? 'Their rulings arrive as a new message when they submit.'
         : 'Their rulings arrive as a new message once they post as a comment on the issue.'
-    return { result: `${where} ${request.id} "${request.title}" (${size}). ${answer} Do not wait or poll.` }
+    return { result: `${where} ${request.id} ${titleForAgent(request)} (${size}). ${answer} Do not wait or poll.` }
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -4618,7 +4808,8 @@ export const register: Register = (on, _options) => {
     const problem = await read($, github)
     const history = { undo: (await read($, undoStack)).length, redo: (await read($, redoStack)).length }
     const press = (action: Action) => (p: { surface: RenderSurface }) => act($, action, p.surface)
-    const troubleText = problem === null ? null : `Issues labelled ${ASKS_LABEL} could not all be read: ${problem}`
+    const waiting = waitingLabel(await read($, sessionRepo))
+    const troubleText = problem === null ? null : `Issues labelled ${waiting} could not all be read: ${problem}`
     const trouble =
       troubleText === null ? null : (
         <Text key="github" dimColor>
@@ -4645,7 +4836,7 @@ export const register: Register = (on, _options) => {
         <Button key="redo" label={`↷ Redo${hint('E')}`} hotkey="e" dimColor={history.redo === 0} onPress={press('redo')} />
       </>
     )
-    // The plate's Undo, there so Q takes back a submit: the ask page's plain words, the desktop's own
+    // The plate's Undo, there to take back a submit: the ask page's plain words, the desktop's own
     // badge for the letter, and Redo only once there is something to redo (the design review, 2026-10-29).
     const badge = (key: string) => (e.surface === 'desktop' ? '' : hint(key))
     const plateHistory =
@@ -4677,7 +4868,7 @@ export const register: Register = (on, _options) => {
             <>
               <Text bold>Nothing queued</Text>
               <Text dimColor>
-                Agents add requests to {FILE} at the project root, or file issues labelled {ASKS_LABEL}. The
+                Agents add requests to {FILE} at the project root, or file issues labelled {waiting}. The
                 vantage-point:ask skill shows them how.
               </Text>
             </>
@@ -4874,8 +5065,8 @@ export const register: Register = (on, _options) => {
           <Box flexDirection="row" flexWrap="wrap" gap={1}>
             <Button
               key="send"
-              label={`${phase === 'label' ? 'Retry the label' : phase === 'maybe' ? 'Check and send' : 'Send'}${hint('R')}`}
-              hotkey="r"
+              label={`${phase === 'label' ? 'Retry the label' : phase === 'maybe' ? 'Check and send' : 'Send'}${badge('R')}`}
+              hotkey={e.surface === 'desktop' ? undefined : 'r'}
               variant="primary"
               onPress={press('submit')}
             />
@@ -4885,6 +5076,31 @@ export const register: Register = (on, _options) => {
           {submissions}
           {trouble}
         </Box>
+      )
+    }
+
+    // An issue with nothing that stands alone to rule on: its to-do card, on every surface (#147).
+    if (request.issue !== undefined && isTodo(request)) {
+      const issue = request.issue
+      const todo: TodoCard = {
+        source: `${issue.repo.split('/')[1] ?? issue.repo}#${issue.number}`,
+        title: request.title,
+        todo: issue.todo,
+        rows: paneRows,
+        columns: e.props.bodyColumns,
+        mono: takesNewProps(await engineBase($)),
+      }
+      const todoBody =
+        Client === undefined ? todoFallback({ Box, Text, Markdown }, todo) : <Client key="todo-body" width="100%" module="../panes/human-queue/native-body.tsx" props={todoBodyProps(todo)} />
+      return todoCard(
+        { Box, Button },
+        todo,
+        {
+          agent: () => pressTodo($, request.id, 'agent'),
+          done: () => pressTodo($, request.id, 'done'),
+          ...(buckets.length > 0 ? { plate: () => void update($, view, v => ({ ...v, zoom: 'plate' as const })) } : {}),
+        },
+        todoBody,
       )
     }
 

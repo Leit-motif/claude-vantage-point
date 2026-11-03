@@ -1,10 +1,11 @@
 // The frontier (issue 115): every open issue of this project, each placed in one state,
 // so the pane can say what waits on the person, what is next, and count the rest.
-// States come from one label map: Matt Pocock's triage labels (renamed by the repo's
-// docs/agents/triage-labels.md when it has one), then agent-config's stage labels.
+// States come from one label map, built from the repository's conventions: the label each
+// of Matt Pocock's roles goes by, then the further labels they name (issue 146).
 // Pure: the I/O is in register.tsx.
+import { ROLE_STATES, ROLES, type Conventions, type LabelState } from '../panes/human-queue/conventions'
 
-export type IssueState = 'waiting' | 'accepting' | 'active' | 'ready' | 'blocked' | 'shaping' | 'parked' | 'open'
+export type IssueState = LabelState | 'open'
 export type FrontierItem = { number: number; title: string; state: IssueState }
 /** Every open issue, oldest first, each with its state. */
 export type Frontier = { items: FrontierItem[] }
@@ -24,39 +25,12 @@ export const STATES: readonly { state: IssueState; name: string }[] = [
 /** When an issue's labels and facts point at several states, the earliest here wins. */
 const PRECEDENCE: readonly IssueState[] = ['parked', 'waiting', 'accepting', 'blocked', 'active', 'ready', 'shaping', 'open']
 
-/** Matt Pocock's triage roles, by the label string his skills use. */
-const TRIAGE: Readonly<Record<string, IssueState>> = {
-  'needs-triage': 'shaping',
-  'needs-info': 'shaping',
-  'ready-for-agent': 'ready',
-  'ready-for-human': 'waiting',
-  wontfix: 'parked',
-}
-
-const OTHERS: Readonly<Record<string, IssueState>> = {
-  'stage:backlog': 'parked',
-  'stage:align': 'shaping',
-  'stage:build': 'active',
-  'stage:verify': 'accepting',
-  'stage:ship': 'active',
-  paused: 'parked',
-  deferred: 'parked',
-}
-
 export type LabelMap = ReadonlyMap<string, IssueState>
 
-/**
- * The label map: Matt's triage labels under the names `triageLabels` (the repo's
- * docs/agents/triage-labels.md) gives them, his own names otherwise, then the rest.
- */
-export function labelMap(triageLabels: string | null): LabelMap {
-  const map = new Map<string, IssueState>(Object.entries(OTHERS))
-  for (const [role, state] of Object.entries(TRIAGE)) map.set(role, state)
-  for (const line of (triageLabels ?? '').split('\n')) {
-    const cells = /^\s*\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|/.exec(line)
-    const state = cells === null ? undefined : TRIAGE[cells[1]!]
-    if (state !== undefined) map.set(cells![2]!, state)
-  }
+/** The label map, keyed lower-case since GitHub's labels match without case (as the queue's `carries` does): the further labels `conventions` name, then each role's label, which wins a tie. */
+export function labelMap(conventions: Conventions): LabelMap {
+  const map = new Map<string, IssueState>(conventions.labels.map(rule => [rule.label.toLowerCase(), rule.state]))
+  for (const role of ROLES) map.set(conventions.roles[role].toLowerCase(), ROLE_STATES[role])
   return map
 }
 
@@ -100,7 +74,7 @@ export function parseRepoIssues(stdout: string): RepoIssue[] {
 
 /** An issue's state: an open blocker or an assignee counts beside its labels, and precedence settles a tie. */
 export function stateOf(issue: RepoIssue, map: LabelMap): IssueState {
-  const found = new Set<IssueState>(issue.labels.flatMap(label => map.get(label) ?? []))
+  const found = new Set<IssueState>(issue.labels.flatMap(label => map.get(label.toLowerCase()) ?? []))
   if (issue.blockedBy > 0) found.add('blocked')
   if (issue.assignees > 0) found.add('active')
   return PRECEDENCE.find(state => found.has(state)) ?? 'open'

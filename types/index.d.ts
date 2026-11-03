@@ -28,6 +28,22 @@ export type HumanQueueUndo =
   | { kind: 'ruling'; request: string; item: number; heading: string; before: string | null; after: string | null }
   | { kind: 'note'; request: string; before: string | null; after: string | null }
   | { kind: 'submit'; request: string; before: HumanQueueSubmitLines; after: HumanQueueSubmitLines }
+  /** A to-do card's press (#147): handed to an agent, or closed as done; undo moves the issue back. */
+  | { kind: 'todo'; request: string; move: 'agent' | 'done' }
+
+/**
+ * Matt Pocock's triage brief on an issue, read as loosely as it was written
+ * (#147): a field the brief lacks is null or empty, never an error.
+ */
+export type HumanQueueBrief = {
+  summary: string | null
+  /** Why it needs a person, the brief's text alone, its first letter raised: `It is your voice, and no agent can record it.` */
+  reason: string | null
+  criteria: { text: string; done: boolean }[]
+}
+
+/** What an issue's to-do card draws (#147): its trusted brief, else its body's opening. */
+export type HumanQueueTodo = { brief: HumanQueueBrief | null; opening: string }
 
 /** What a request filed as an issue carries for grouping: the issue, its labels, its parent spec, its kind. */
 export type HumanQueueIssueMeta = {
@@ -37,17 +53,22 @@ export type HumanQueueIssueMeta = {
   url: string
   /** Label names, as GitHub lists them. */
   labels: string[]
-  /** The parent spec as `owner/name#n`: the sub-issue parent, else a `Part of #n` line; null with neither. */
+  /** The parent spec as `owner/name#n`, by the links the repository's conventions name: the sub-issue parent, else a trusted author's `Part of #n` line; null with neither. */
   parent: string | null
   /** `items` when an `## Asks` section holds items to rule on, `plain` when the issue is a plain ask. */
   kind: 'items' | 'plain'
+  /** What its to-do card draws, when it has nothing that stands alone to rule on; absent on an ask held from before #147 until it is read again. */
+  todo?: HumanQueueTodo
 }
 
 /** One open issue labelled ready-for-human, read as a request. */
 export type HumanQueueIssue = {
   /** `owner/name#n`: the request's id. */
   key: string
+  /** The issue's title, for the person: no agent hears it unless `trusted` (issue 149). */
   title: string
+  /** Whether the issue's author passed `trusted`: only then do the body's asks count and the title reach an agent. */
+  trusted: boolean
   /** GitHub's updatedAt; a change means the issue is read again. */
   updatedAt: string
   /** GitHub's createdAt: the pane lists issues oldest first. */
@@ -62,7 +83,7 @@ export type HumanQueueIssue = {
 /**
  * One submit of an issue's rulings. Only the session where the person pressed
  * Submit sends it, once its undo window has passed; whatever that session
- * leaves unsent waits for the person to press R. Nothing posts on its own.
+ * leaves unsent waits for the person to press Send in the pane. Nothing posts on its own.
  */
 export type HumanQueueSubmission = {
   /** Stable for this submit; the comment carries it as a marker. */
@@ -82,15 +103,17 @@ export type HumanQueueSubmission = {
   /**
    * `waiting`: in its session's undo window. `sending`: its POST was under
    * way. `unsent`: never sent (its session ended, or a check before the POST
-   * failed): R sends it. `ambiguous`: the POST failed or its answer was lost,
-   * so it may have landed: R checks before sending. `posted`: on the issue.
+   * failed): Send posts it. `ambiguous`: the POST failed or its answer was lost,
+   * so it may have landed: Check and send looks before posting. `posted`: on the issue.
    */
   state: 'waiting' | 'sending' | 'unsent' | 'ambiguous' | 'posted'
   /** When the POST was tried, for `sending` and `ambiguous`. */
   triedAt: number | null
   commentUrl: string | null
-  /** `kept`: the ask changed after it was answered, so ready-for-human stays on. */
+  /** `kept`: the ask changed after it was answered, so the repository's waiting label stays on. */
   label: 'pending' | 'removed' | 'kept'
+  /** Once the waiting label is off by this submit: whether it was swapped for the ready label or removed, and `missing` the ready label the repository lacks. */
+  moved?: { kind: 'swap'; waiting: string; ready: string } | { kind: 'remove'; waiting: string; missing: string | null }
   /** The last step's failure, shown until a step succeeds. */
   error: string | null
 }
@@ -116,6 +139,8 @@ export type HumanQueueAgentNext = {
   progress: { closed: number; total: number } | null
   /** The issue's native parent as `owner/name#n`; null when it has none. */
   parent: string | null
+  /** Whether the signed-in login opened the issue: only then may its title reach an agent (issue 149). */
+  isTrusted: boolean
 } | null
 
 /** The observed branch context: an unreadable ticket is not an Idle session. */
@@ -323,8 +348,23 @@ export type HumanQueueComposedView = { prose: string | null; scopes: Record<stri
 /** The visuals-grading round (#98): the ask shown, each ask's pick and comment by case id, the option whose text is open, and whether the picks were sent. */
 export type HumanQueueGrading = { at: number; picks: Record<string, { pick: string; comment?: string }>; prose: string | null; sent: boolean }
 
-/** What the tour's setup lines say: gh and its login, and whether this folder has a human-queue.md. */
-export type VantageTourSetup = { gh: 'signed-in' | 'signed-out' | 'missing' | 'unknown'; login: string | null; queueFile: boolean }
+/**
+ * What the tour's setup lines say: the system, gh with its login and version, and whether this folder has a
+ * human-queue.md, and which conventions are in force. `platform` is `unknown` and `gh` is `unknown` until the tour has read them; `ghVersion`
+ * is the `X.Y.Z` `gh --version` printed, null when it printed none.
+ */
+export type VantageTourSetup = {
+  platform: 'macos' | 'other' | 'unknown'
+  gh: 'signed-in' | 'signed-out' | 'missing' | 'unknown'
+  ghVersion: string | null
+  login: string | null
+  queueFile: boolean
+  /**
+   * The conventions files in force for this folder's repository (issue 155), nearest first, and each field a
+   * file set that failed its check; absent until the tour has read them, and in a setup an older build stored.
+   */
+  conventions?: { files: ('repo' | 'triage' | 'person')[]; problems: { file: 'repo' | 'person'; field: string; reason: string }[] }
+}
 
 /**
  * The session banner's state (issue 119), as panes/banner's `Edited`, `Governing` and `Placed`:

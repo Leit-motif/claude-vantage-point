@@ -8,8 +8,9 @@
 // Run with Node 22.6+:
 //   node --experimental-strip-types scripts/artifact-sync.mts export <queue.md> <request> --source <label> --out <dir>
 //   node --experimental-strip-types scripts/artifact-sync.mts import <queue.md> <request> --source <label> --from <dir>
-import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync, existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { complete, findItem, findRequest, localDate, parse, setNote, setRuling } from '../panes/human-queue/queue.ts'
 import type { Request } from '../panes/human-queue/queue.ts'
@@ -158,7 +159,8 @@ function main(argv: string[]) {
   console.log(JSON.stringify({ rid, changed: result.changed, submitted: result.submitted }))
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Compared as real paths: a URL escapes a space, and node runs a symlinked script from its target.
+if (process.argv[1] !== undefined && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     main(process.argv.slice(2))
   } catch (error) {

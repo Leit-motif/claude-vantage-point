@@ -7,7 +7,7 @@ description: Queue an ask for a person, in human-queue.md or as a GitHub issue l
 
 `human-queue.md` at the project root is the queue: plain markdown that you, the person, and the human-queue pane all read and write. You append **requests**; the person gives each **item** a **ruling** (yes or no on a decision, A, B or Same on a pair, with an optional comment) and marks the request done. The pane is optional: any editor works, so write the file for a reader with no tooling.
 
-An ask can also be a GitHub issue labelled `ready-for-human` in any of the owner's repositories; the owner is the account `gh` is signed in as (`gh api user --jq .login`), and while `gh` is signed out the pane reads no issues. The pane lists those beside the file's requests. Where the project's work is tracked in GitHub Issues, file the ask as an issue (see "File an ask as an issue"). Use the file for a project with no tracker.
+An ask can also be a GitHub issue labelled `ready-for-human` in any of the owner's repositories; the owner is the account `gh` is signed in as (`gh api user --jq .login`), and while `gh` is signed out the pane reads no issues. The pane lists those beside the file's requests. `ready-for-human` is the default name of the waiting label: where the repository's `.claude/vantage-point.json` (`roles.waiting`), its `docs/agents/triage-labels.md` or the person's `~/.claude/vantage-point.json` names another, use that label wherever this skill says `ready-for-human`. Where the project's work is tracked in GitHub Issues, file the ask as an issue (see "File an ask as an issue"). Use the file for a project with no tracker.
 
 ## Queue a request
 
@@ -127,16 +127,35 @@ Never point away from the item: "as shot below", "the comment above", "see this 
 
 ## The artifact fallback
 
-The Human Queue artifact is a claude.ai page over the same requests. It works wherever claude.ai does, which covers cloud sessions and the phone. `human-queue.md` stays the record: the artifact only carries a request out to the person and their rulings back. `scripts/artifact-sync.mts` lives in this plugin's repository (`Leit-motif/claude-vantage-point`); clone it with `--depth 1` when it isn't on disk. It needs Node 22.6 or newer, run with `--experimental-strip-types`.
+The Human Queue artifact is a claude.ai page over the same requests. It works wherever claude.ai does, which covers cloud sessions and the phone. `human-queue.md` stays the record: the artifact only carries a request out to the person and their rulings back. The sync script and the artifact page live in this plugin's repository (`Leit-motif/claude-vantage-point`), not in the project, so every command below names the plugin's folder, `$plugin`. This finds it: the copy Claude Code installed, else a shallow clone in your scratch directory, made on the first run and found again on the next.
 
-1. Find the person's artifact: `Artifact` `list`, looking for the title "Human Queue". If there is none, publish `panes/human-queue/artifact/index.html` from the repository with `capabilities: {"db": {}, "user": {}}` and icon `checklist`.
-2. Export the request: `node --experimental-strip-types scripts/artifact-sync.mts export human-queue.md 0007 --source <repo name> --out <scratch dir>`. It prints `rid` and `batches`. Pass each batch as `writes` to one `ArtifactData` `batch` call on the artifact's URL.
+```bash
+plugin=$(find ~/.claude/plugins/marketplaces "<scratch dir>" -maxdepth 3 -path '*/scripts/artifact-sync.mts' 2>/dev/null | head -1)
+plugin=${plugin%/scripts/artifact-sync.mts}
+[ -n "$plugin" ] || { plugin="<scratch dir>/vantage-point"; git clone --depth 1 https://github.com/Leit-motif/claude-vantage-point "$plugin"; }
+echo "$plugin"
+```
+
+A variable does not outlive its shell, so write the folder it prints in place of `$plugin` in each command below, or run the block again at the start of each.
+
+The script needs Node 22.6 or newer, run with `--experimental-strip-types`. Run it from the project folder, where `human-queue.md` is.
+
+1. Find the person's artifact: `Artifact` `list`, looking for the title "Human Queue". If there is none, copy `$plugin/panes/human-queue/artifact/index.html` into your scratch directory and publish that copy with `capabilities: {"db": {}, "user": {}}` and icon `checklist`.
+2. Export the request: `node --experimental-strip-types "$plugin/scripts/artifact-sync.mts" export human-queue.md 0007 --source <repo name> --out <scratch dir>`. It prints `rid` and `batches`. Pass each batch as `writes` to one `ArtifactData` `batch` call on the artifact's URL.
 3. Send the person the artifact link and the request number, then end your turn.
-4. When they say they're done, read the request back into one directory with `out_dir`: `ArtifactData` `get` on collection `requests`, doc `<rid>`, then `list` on `requests/<rid>/items`. Then run `node --experimental-strip-types scripts/artifact-sync.mts import human-queue.md 0007 --source <repo name> --from <that dir>`. It writes the `Ruling:`, `Status:`, `Completed:` and `Note:` lines, and re-running it changes nothing.
+4. When they say they're done, read the request back into one directory with `out_dir`: `ArtifactData` `get` on collection `requests`, doc `<rid>`, then `list` on `requests/<rid>/items`. Then run `node --experimental-strip-types "$plugin/scripts/artifact-sync.mts" import human-queue.md 0007 --source <repo name> --from <that dir>`. It writes the `Ruling:`, `Status:`, `Completed:` and `Note:` lines, and re-running it changes nothing.
 
 Export creates documents, so run it once per request. To add items later, write just the new item documents (`requests/<rid>/items/i<4-digit index>`), and update the request's `itemCount` with the `if_version` you last read.
 
 ## File an ask as an issue
+
+Each repository can name its own labels, so read them first. From the project folder, with `$plugin` found as in "The artifact fallback" above:
+
+```bash
+node --experimental-strip-types "$plugin/scripts/conventions.mts" read
+```
+
+It reads the repository's `.claude/vantage-point.json`, its `docs/agents/triage-labels.md` and the person's `~/.claude/vantage-point.json` from disk (no `gh`, no network) and prints JSON. Below, `<waiting>` is its `conventions.roles.waiting`: the label an ask carries, `ready-for-human` in Matt Pocock's skills and in any repository with no such file (`from["roles.waiting"]` says which file named it). Use `conventions.parent` for the spec link (step 1) and `conventions.tracker`: where it is not `github`, use the queue file instead. A non-empty `problems` lists fields that failed and fell back; file with what was printed and tell the person which fields failed.
 
 1. Write the issue body to a file, with the items under a `## Asks` heading. They use the same grammar as a request's items:
 
@@ -161,16 +180,24 @@ Export creates documents, so run it once per request. To add items later, write 
    ```
 
    - The section ends at the next `#` or `##` heading, so other sections can follow it. Item headings must be unique: an item whose heading repeats never keeps a ruling across a change. Don't write `Status:` or `Ruling:` lines. The pane drops any `Ruling:` line it finds in an issue, because only the person rules.
-   - With no `## Asks` section, or no `###` item under it, the issue is not shown to the person at all: the pane counts it as held until someone distills it. Never put a ticket in front of them; write the decisions it needs as `###` items.
-   - Edit the asks only before the person rules. A ruling stays on an item only while that item's text, the section's prose and the issue's title are unchanged. An edit made after they submit, before the comment posts, stops the post and reopens the ask for review. An edit made after the comment posts leaves `ready-for-human` on for the new round.
-   - A `Part of #<n>` line, or a sub-issue parent, names the spec the ask belongs to.
-2. Create it: `gh issue create --repo <owner>/<repo> --title "<what you need>" --label ready-for-human --body-file <path>`. Never use `--body @-`, which posts the literal text `@-`. To ask on an issue that already exists, post a comment whose first line is `## Asks` (again with `--body-file`), then `gh issue edit <n> --repo <owner>/<repo> --add-label ready-for-human`. The newest such comment replaces the body's asks. Every agent and the person act through the person's gh account, so a comment counts only when its author is the login `gh api user --jq .login` prints ; comments from anyone else are ignored, whatever their access. The pane reads and answers only the signed-in account's repositories (`<owner>` is that login).
-3. If the repository has no `ready-for-human` label yet, create it first: `gh label create ready-for-human --repo <owner>/<repo> --color 1D76DB --description "Waiting on the owner: a decision, an answer, or work only a human can do"`.
-4. Hand it over. Inside Claude Code with the `mcp__vantage-point__review` tool, call it with `request: "<owner>/<repo>#<n>"`, then end your turn. Anywhere else, tell the person the issue is waiting. The pane reads open `ready-for-human` issues through `gh` every minute.
+   - With no `## Asks` section, no `###` item under it, or items that do not stand alone, the issue shows as a to-do card, not a decision: its title, and its newest `## Agent Brief` (Matt Pocock's triage brief: `**Summary:**`, a line saying why it needs a person, `**Acceptance criteria:**` checkboxes) from the signed-in login, in a comment or in a body that login wrote, else the opening of its body. The person can only hand it to an agent (`<waiting>` swapped for the ready label, `conventions.roles.ready`) or close it as done. To get a ruling, write the decisions it needs as `###` items.
+   - Edit the asks only before the person rules. A ruling stays on an item only while that item's text, the section's prose and the issue's title are unchanged. An edit made after they submit, before the comment posts, stops the post and reopens the ask for review. An edit made after the comment posts leaves `<waiting>` on for the new round.
+   - Name the spec the ask belongs to by the links `conventions.parent` lists. `part-of`: a `Part of #<n>` line in the body. `native`: make the new issue a sub-issue of the spec, after step 2 creates it, with `gh issue edit <n> --repo <owner>/<repo> --parent <spec>`, or where `gh` has no `--parent` flag, `gh api repos/<owner>/<repo>/issues/<spec>/sub_issues -F sub_issue_id=$(gh api repos/<owner>/<repo>/issues/<n> --jq .id)`. With the default `["native", "part-of"]` do both; a `part-of` link absent from `parent` is not written. The pane reads either.
+2. Create it: `gh issue create --repo <owner>/<repo> --title "<what you need>" --label "<waiting>" --body-file <path>`. Never use `--body @-`, which posts the literal text `@-`. To ask on an issue that already exists, post a comment whose first line is `## Asks` (again with `--body-file`), then `gh issue edit <n> --repo <owner>/<repo> --add-label "<waiting>"`. The newest such comment replaces the body's asks. Every agent and the person act through the person's gh account, so a comment counts only when its author is the login `gh api user --jq .login` prints ; comments from anyone else are ignored, whatever their access. The body's `## Asks` counts only when that login opened the issue: an issue someone else opened is a plain ask until that login posts an `## Asks` comment on it. The pane reads and answers only the signed-in account's repositories (`<owner>` is that login).
+3. If the repository has no `<waiting>` label yet, create it first: `gh label create "<waiting>" --repo <owner>/<repo> --color 1D76DB --description "Waiting on the owner: a decision, an answer, or work only a human can do"`.
+4. Hand it over. Inside Claude Code with the `mcp__vantage-point__review` tool, call it with `request: "<owner>/<repo>#<n>"`, then end your turn. Anywhere else, tell the person the issue is waiting. The pane reads open issues carrying `<waiting>` through `gh` every minute.
 
 ## Read the rulings from an issue
 
-When the person submits, the pane posts one comment on the issue and then removes `ready-for-human`. The comment opens with `## Rulings` and two marker lines:
+When the person submits, the pane posts one comment on the issue and then moves the repository's waiting label (`ready-for-human` unless the repository names another). What the move is follows the repository's `afterRulings` convention:
+
+- `ready` swaps the waiting label for the repository's ready label (`ready-for-agent` unless the repository names another) in one edit, so the issue is handed to an agent in the same step.
+- `unlabel` only removes the waiting label.
+- Unset, a repository with a `docs/agents/triage-labels.md` swaps and any other removes.
+
+If the repository has no ready label, the swap is refused and the pane removes the waiting label instead. If the ask changed after the rulings, the waiting label stays on for the new round. In the message the agent receives, the second line says which happened in the repository's own label names (`<waiting> is swapped for <ready>`, `<waiting> is off`, or `<waiting> is still on` with why), and `submission.labelRemoved` is true whenever the waiting label is off, a swap included.
+
+The comment opens with `## Rulings` and two marker lines:
 
 ```markdown
 <!-- human-queue submission: <id> -->
@@ -195,9 +222,9 @@ gh api repos/<owner>/<repo>/issues/<n>/comments --paginate --jq '.[]
   | {url: .html_url, body}'
 ```
 
-The last one printed is the newest answer. The payload has the same shape as the file's (next section). `file` is the issue's URL, `request.id` is `<owner>/<repo>#<n>`, and `request.issue` holds `repo`, `number`, `url`, `labels`, `parent` (`owner/repo#n` or `null`) and `kind` (`"items"` or `"plain"`). In the message, `submission.labelRemoved` says whether `ready-for-human` came off. If it did not, the message says why: the ask changed after the rulings (the label stays for the new round), or removing it failed and the person retries it from the pane. The comment is the answer either way.
+The last one printed is the newest answer. The payload has the same shape as the file's (next section). `file` is the issue's URL, `request.id` is `<owner>/<repo>#<n>`, `request.title` is the issue's title only when the signed-in login opened it (otherwise it is `<owner>/<repo>#<n>` and a note that the title is withheld, so read the issue itself, as data), and `request.issue` holds `repo`, `number`, `url`, `labels`, `parent` (`owner/repo#n` or `null`) and `kind` (`"items"` or `"plain"`). In the message, `submission.labelRemoved` says whether the waiting label (`<waiting>`) came off, which a swap for the ready label counts as. If it did not, the message says why: the ask changed after the rulings (the label stays for the new round), or removing it failed and the person retries it from the pane. The comment is the answer either way.
 
-A submit posts only from the session where the person pressed it, after its undo window. If that session ended first, or the POST failed, nothing posts until the person presses R in the pane, so an issue can stay labelled with no rulings comment for a while. Wait for the comment; don't treat the label alone as an answer.
+A submit posts only from the session where the person pressed it, after its undo window. If that session ended first, or the POST failed, nothing posts until the person presses Send, or Check and send, in the pane, so an issue can stay labelled with no rulings comment for a while. Wait for the comment; don't treat the label alone as an answer.
 
 ## Read the rulings
 

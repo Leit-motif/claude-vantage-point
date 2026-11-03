@@ -7,9 +7,10 @@
 // and the presses.
 import type { BoxProps, ButtonProps, ElementConstructor, RenderElement, TextProps } from 'claude-code'
 import type { VantageTourSetup } from '../types'
+import { GH_MIN, ghVersionState } from '../panes/human-queue/issues'
 import { SIGNAL_YELLOW } from './signal'
 
-export type TourKey = 'agent' | 'subagents' | 'decide' | 'queue' | 'reader' | 'banner' | 'caches'
+export type TourKey = 'conventions' | 'agent' | 'subagents' | 'decide' | 'queue' | 'reader' | 'banner' | 'caches'
 
 /**
  * One stop: the feature's name, what it is, where to look once it runs, and
@@ -25,6 +26,18 @@ export type TourStop = { key: TourKey; name: string; does: string; look: string 
 const TOUR = 'Vantage Point tour'
 
 export const TOUR_STOPS: readonly TourStop[] = [
+  {
+    key: 'conventions',
+    name: 'Your workflow',
+    does: 'Reads this repository’s labels, branch names and ADR folders, and proposes what Vantage Point reads differently.',
+    look: 'Each proposal lands in the queue; nothing is written until you rule.',
+    act: 'send',
+    prompt:
+      `${TOUR}, your workflow: following the vantage-point:set-conventions skill, read this repository and propose each convention ` +
+      'Vantage Point reads differently from what the repository shows. If there is none, say so in one line naming where its labels ' +
+      'and branch forms come from. Otherwise file the proposal and open it with the vantage-point review tool, and once my rulings ' +
+      'arrive, write only the fields I ruled yes.',
+  },
   {
     key: 'agent',
     name: 'Agent row',
@@ -100,7 +113,7 @@ export const TOUR_STOPS: readonly TourStop[] = [
   },
 ]
 
-/** What the plugin leans on, read when the tour opens. `null` login: gh is not signed in or not there. */
+/** What the plugin leans on, read when the tour opens. `null` login: gh is not signed in or not there; `null` ghVersion: it printed none. */
 export type TourSetup = VantageTourSetup
 
 /** The toast a fresh install shows once on this machine. */
@@ -112,8 +125,14 @@ export type TourElements = {
   Button: ElementConstructor<ButtonProps>
 }
 
-/** The setup lines: each a fact and what follows from it, amber only where the person has something to do. */
+/** The setup lines, the conventions in force among them (issue 155): each a fact and what follows from it, amber only where the person has something to do. */
 export function setupLines(setup: TourSetup): { key: string; name: string; fact: string; waits: boolean }[] {
+  const system =
+    setup.platform === 'macos'
+      ? { fact: 'macOS · the system Vantage Point runs on for now', waits: false }
+      : setup.platform === 'other'
+        ? { fact: 'not macOS · Vantage Point runs on macOS only for now, so some of it will not work here', waits: true }
+        : { fact: 'checking…', waits: false }
   const gh =
     setup.gh === 'signed-in'
       ? { fact: `signed in as ${setup.login} · asks filed as issues are read from its repositories`, waits: false }
@@ -122,13 +141,40 @@ export function setupLines(setup: TourSetup): { key: string; name: string; fact:
         : setup.gh === 'missing'
           ? { fact: 'not installed · install the GitHub CLI for asks filed as issues; human-queue.md works without it', waits: true }
           : { fact: 'checking…', waits: false }
+  const state = ghVersionState(setup.ghVersion)
+  const version =
+    setup.gh === 'unknown'
+      ? { fact: 'checking…', waits: false }
+      : state === 'met'
+        ? { fact: `${setup.ghVersion} · new enough to read asks filed as issues`, waits: false }
+        : state === 'old'
+          ? { fact: `${setup.ghVersion} found, ${GH_MIN} or newer needed · asks filed as issues cannot be read without it; update the GitHub CLI`, waits: true }
+          : { fact: `unknown · gh did not say its version; asks filed as issues need ${GH_MIN} or newer`, waits: false }
   const file = setup.queueFile
     ? { fact: 'in this folder · its open requests are in the queue', waits: false }
     : { fact: 'not in this folder yet · an agent writes it with its first ask', waits: false }
   return [
+    { key: 'system', name: 'system', ...system },
     { key: 'gh', name: 'gh', ...gh },
+    // Without gh there is no version to check.
+    ...(setup.gh === 'missing' ? [] : [{ key: 'gh-version', name: 'gh version', ...version }]),
     { key: 'file', name: 'human-queue.md', ...file },
+    { key: 'conventions', name: 'conventions', ...conventionsFact(setup.conventions) },
   ]
+}
+
+const CONVENTION_FILE_NAMES = { repo: '.claude/vantage-point.json here', triage: 'docs/agents/triage-labels.md', person: 'your ~/.claude/vantage-point.json' } as const
+
+/** Which conventions are in force, nearest file first, and each field a file set that failed its check: amber, since only the person can fix a file. */
+function conventionsFact(conventions: TourSetup['conventions']): { fact: string; waits: boolean } {
+  if (conventions === undefined) return { fact: 'checking…', waits: false }
+  const inForce =
+    conventions.files.length === 0
+      ? "Matt Pocock's defaults · no conventions file; Your workflow below proposes one where this repository differs"
+      : `${conventions.files.map(one => CONVENTION_FILE_NAMES[one]).join(', then ')}, over Matt Pocock's defaults`
+  if (conventions.problems.length === 0) return { fact: inForce, waits: false }
+  const failed = conventions.problems.map(one => `${one.field} in ${one.file === 'repo' ? 'this repository’s file' : 'your file'} (${one.reason})`)
+  return { fact: `${inForce} · ignored, failing its check: ${failed.join('; ')}`, waits: true }
 }
 
 /** Cells for a setup line's name, `human-queue.md` and a space; two more while a line carries the dot. */

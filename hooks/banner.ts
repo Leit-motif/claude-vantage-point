@@ -1,7 +1,7 @@
 // The session banner's reads (issue 119): which repository an edited file lives in, that
 // repository's ADRs and the bindings its history makes, each read once and kept. Never takes
 // `$`: register.tsx hands it local git and file reads (`bannerIO($)`). No GitHub call.
-import { ADR_DIRS, adrKey, bind, governing, LOG_ARGS, parseAdr, parseLog, relativeTo } from '../panes/banner/decisions.ts'
+import { adrKey, bind, governing, LOG_ARGS, parseAdr, parseLog, relativeTo } from '../panes/banner/decisions.ts'
 import type { Adr, Bindings } from '../panes/banner/decisions.ts'
 import type { Governing } from '../panes/banner/picture.ts'
 
@@ -12,6 +12,8 @@ export type BannerIO = {
   list: (dir: string) => Promise<string[] | null>
   read: (path: string) => Promise<string>
   now: () => Promise<number>
+  /** The folders inside the repository at `root` its conventions keep ADRs in (issue 146). */
+  adrDirs: (root: string) => Promise<readonly string[]>
 }
 
 /** How long a repository's ADRs and bindings stand before they are read again. */
@@ -36,7 +38,8 @@ function rootOf(io: BannerIO, dir: string): Promise<string | null> {
 
 async function readRepo(io: BannerIO, root: string, now: number): Promise<Repo> {
   const adrs = new Map<number, Adr>()
-  for (const dir of ADR_DIRS) {
+  const dirs = await io.adrDirs(root)
+  for (const dir of dirs) {
     const names = await io.list(`${root}/${dir}`).catch(() => null)
     for (const name of names ?? []) {
       if (adrKey(name) === null) continue
@@ -45,7 +48,7 @@ async function readRepo(io: BannerIO, root: string, now: number): Promise<Repo> 
     }
   }
   const log = adrs.size === 0 ? null : await io.git(root, LOG_ARGS).catch(() => null)
-  return { at: now, adrs, bindings: bind(parseLog(log ?? ''), [...adrs.values()]) }
+  return { at: now, adrs, bindings: bind(parseLog(log ?? ''), [...adrs.values()], dirs) }
 }
 
 async function repoAt(io: BannerIO, root: string): Promise<Repo> {

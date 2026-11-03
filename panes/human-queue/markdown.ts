@@ -7,10 +7,11 @@
 export type Run = { text: string; bold?: true; italic?: true; code?: true }
 
 export type Block =
-  | { kind: 'para'; depth: number; runs: Run[] }
+  /** `dim` steps a block back, as a met step or a closing count is (the to-do card, #147); markdown never sets it. */
+  | { kind: 'para'; depth: number; runs: Run[]; dim?: true }
   | { kind: 'heading'; depth: number; runs: Run[] }
   /** `marker` is `•` for a bullet, or the item's own number with its `.`. */
-  | { kind: 'item'; depth: number; marker: string; runs: Run[] }
+  | { kind: 'item'; depth: number; marker: string; runs: Run[]; dim?: true }
   | { kind: 'code'; depth: number; lang: string; lines: string[] }
 
 type Style = Omit<Run, 'text'>

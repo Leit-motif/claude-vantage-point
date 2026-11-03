@@ -8,9 +8,6 @@
  */
 export type Adr = { n: number; key: string; slug: string; title: string; accepted: boolean; superseded: boolean; issues: number[] }
 
-/** Where a repository keeps its ADRs: this one in `docs/adr`, interlace-android in `docs/decisions`. */
-export const ADR_DIRS = ['docs/adr', 'docs/decisions'] as const
-
 /** One commit as `LOG_ARGS` prints it: its message, and the files it touched. */
 export type Commit = { message: string; files: string[] }
 
@@ -69,10 +66,9 @@ export function parseLog(text: string): Commit[] {
     })
 }
 
-const isAdrFile = (path: string) => ADR_DIRS.some(dir => path.startsWith(`${dir}/`))
-
-/** Every file the history binds, to each ADR in force, counted once a commit. A superseded ADR binds nothing. */
-export function bind(commits: readonly Commit[], adrs: readonly Adr[]): Bindings {
+/** Every file the history binds, to each ADR in force, counted once a commit. A superseded ADR, and an ADR file itself (under one of `adrDirs`), binds nothing. */
+export function bind(commits: readonly Commit[], adrs: readonly Adr[], adrDirs: readonly string[]): Bindings {
+  const isAdrFile = (path: string) => adrDirs.some(dir => path.startsWith(`${dir}/`))
   const inForce = adrs.filter(adr => !adr.superseded)
   const byIssue = new Map<number, number[]>()
   for (const adr of inForce) for (const issue of adr.issues) byIssue.set(issue, [...(byIssue.get(issue) ?? []), adr.n])

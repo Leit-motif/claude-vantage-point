@@ -119,9 +119,9 @@ const Body: ClientModule<BodyProps, true> = (props, surface) => {
 /** The closing `Refs:` line names what the prose explained (the ask skill), so it steps back to dim. */
 const REFS = /^Refs:/
 
-function line(Text: ClientElements['Text'], runs: Run[], key: string, props: BodyProps, heading = false): RenderChildren {
+function line(Text: ClientElements['Text'], runs: Run[], key: string, props: BodyProps, heading = false, dim = false): RenderChildren {
   return (
-    <Text key={key} wrap="wrap" bold={heading || undefined} dimColor={REFS.test(runs[0]?.text ?? '') || undefined}>
+    <Text key={key} wrap="wrap" bold={heading || undefined} dimColor={dim || REFS.test(runs[0]?.text ?? '') || undefined}>
       {runs.map((run, i) =>
         run.bold === undefined && run.italic === undefined && run.code === undefined ? (
           run.text
@@ -157,14 +157,14 @@ function drawBlock(Box: ClientElements['Box'], Text: ClientElements['Text'], blo
           <Text dimColor>{block.marker}</Text>
         </Box>
         <Box key={`${key}-runs`} flexShrink={1}>
-          {line(Text, block.runs, `${key}-text`, props)}
+          {line(Text, block.runs, `${key}-text`, props, false, block.dim === true)}
         </Box>
       </Box>
     )
   }
   return (
     <Box key={key} marginLeft={inset} marginTop={top}>
-      {line(Text, block.runs, `${key}-text`, props, block.kind === 'heading')}
+      {line(Text, block.runs, `${key}-text`, props, block.kind === 'heading', block.kind === 'para' && block.dim === true)}
     </Box>
   )
 }

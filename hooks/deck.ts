@@ -1,6 +1,6 @@
 // The decision deck fills itself after a reply (issue #14): a regex, a Haiku gate,
-// a tool-less fork of the session that writes the deck as JSON, then checks that
-// drop what the evidence does not hold up. Pure: every model call and file read
+// a tool-less fork of the session that writes the deck as JSON, then a Haiku pass
+// that shortens a field past its room. Pure: every model call and file read
 // comes in as a function, so the tests drive it without a session.
 import type { SessionMessage } from 'claude-code'
 import type { HumanQueueDecision } from '../types'
@@ -10,7 +10,7 @@ import { HEADLINE_WORDS, parseDecision } from './reply'
 
 export type Decision = HumanQueueDecision
 
-/** The model the gate, the compressor and the support check run on. */
+/** The model the gate and the compressor run on. */
 export const GATE_MODEL = 'haiku'
 
 /** A reply less its gist: the speed reader's `<gist>` sits after the question, hidden from the transcript, and is no part of the decision. */
@@ -308,7 +308,7 @@ const cutWords = (text: string, words: number) => text.trim().split(/\s+/).slice
 /**
  * Limits are space, not refusals: a text over its room goes to the compressor
  * once, and what still overflows is cut to the room. Citations survive a cut
- * only when they still fit; the quote check renumbers what is left.
+ * only when they still fit.
  */
 export async function fitFields(raw: Record<string, unknown>, compress: Compress): Promise<Record<string, unknown>> {
   const fit = async (value: unknown, words: number): Promise<unknown> => {
