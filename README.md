@@ -110,7 +110,7 @@ Vantage Point runs inside Claude Code on your machine. It has no server of its o
 - **Drawn in the desktop app.** The band, panes and reader draw in the desktop app's Code tab. Cloud sessions on claude.ai draw no mods.
 - **Early preview.** Vantage Point is 0.x, so its formats may still change, and Claude Code's mod API is early access and changes between releases.
 - **Your workflow, as it is.** Vantage Point reads Matt Pocock's triage labels and follows his states, under your repository's own names when its `docs/agents/triage-labels.md` renames them, and never changes that setup. Where your repository works differently, with other labels, branch names or decision-record folders, the tour's **Your workflow** stop proposes the difference for you to rule on ([conventions](#conventions)).
-- **Your own repositories.** Asks and counts come from repositories the signed-in `gh` account owns. Repositories owned by an organization aren't searched yet, though the frontier works inside one.
+- **Your own repositories.** Asks and counts come only from repositories the signed-in `gh` account owns. Organization repositories stay out by design, for trust and to stay within GitHub's search limits; the frontier still works inside one.
 - **Keep warm needs the session running.** A session can only refresh its own cache, so Keep warm holds while the desktop app runs that session.
 - **One band.** Another mod that draws above the prompt may take its place.
 

@@ -188,6 +188,8 @@ export type HumanQueueDecision = {
    * diagrams that make its case. Absent where the fork wrote none; that option's tab draws its cells.
    */
   pages?: (HumanQueueOptionPage | null)[]
+  /** The fork's visuals for this asked question stopped short (#160); the pane says so. */
+  visualsFailed?: boolean
 }
 /** One option's page (#134): a sentence on what it is, then its diagrams, each titled with the point it makes. */
 export type HumanQueueOptionPage = { what: string; diagrams: HumanQueueDiagram[] }

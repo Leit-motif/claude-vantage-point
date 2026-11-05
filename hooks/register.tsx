@@ -2672,6 +2672,11 @@ async function fillStopped($: $, stage: string, detail = ''): Promise<void> {
   await $.store.set(DECK_FILLS_KEY, [...kept, { at: await $.clock.now(), stage, detail: detail.slice(0, 300) }]).catch(() => undefined)
 }
 
+/** An asked question's fill stopped: its pane says so rather than sit blank (#160). */
+async function visualsFailed($: $, ask: string): Promise<void> {
+  await update($, decision, held => held?.ask === ask ? { ...held, visualsFailed: true } : held)
+}
+
 /** One Haiku call; null when it does not answer. */
 async function haiku($: $, system: string, prompt: string, maxTokens: number): Promise<string | null> {
   const r = await $.model.complete({ model: GATE_MODEL, system, prompt, maxTokens, timeoutMs: 30_000 })
@@ -2715,17 +2720,23 @@ async function fillDeck($: $, answer: string, wrap: WrapUpAsk | null, epoch: num
     const gate = await haiku($, GATE_SYSTEM, gateText(answer, wrap), 5)
     if (gate === null || !isYes(gate) || epoch !== deckEpoch) return fillStopped($, 'gate', gate ?? 'no answer')
   }
+  /** A stop this turn's own question is still waiting on, which the pane says. */
+  const failed = async (stage: string, detail: string) => {
+    await fillStopped($, stage, detail)
+    if (asked && wrap !== null && epoch === deckEpoch) await visualsFailed($, wrap.ask)
+  }
   const fork = await $.model.fork({ prompt: forkPrompt(wrap) })
-  if (!fork.isAnswered || epoch !== deckEpoch) return fillStopped($, 'fork', fork.isAnswered ? 'superseded' : String((fork as { reason?: unknown }).reason ?? 'unanswered'))
+  if (epoch !== deckEpoch) return fillStopped($, 'fork', 'superseded')
+  if (!fork.isAnswered) return failed('fork', String((fork as { reason?: unknown }).reason ?? 'unanswered'))
   const raw = parseForkJson(fork.text)
-  if (raw === null) return fillStopped($, 'json', fork.text.slice(-300))
+  if (raw === null) return failed('json', fork.text.slice(-300))
   const fitted = await fitFields(raw, (text, words) =>
     haiku($, `Say this in ${words} words or fewer, Reply with the shorter text only.`, text, 120))
   const forked = decisionFromFork(fitted)
-  if (forked === null) return fillStopped($, 'parse', JSON.stringify(fitted).slice(0, 300))
+  if (forked === null) return failed('parse', JSON.stringify(fitted).slice(0, 300))
   // The row's buttons are the agent's own options: a deck that names others would answer a different question.
   const parsed = asked && wrap !== null ? asButtons(forked, wrap.actions) : forked
-  if (parsed === null) return fillStopped($, 'options', JSON.stringify({ fork: forked.options, asked: wrap?.actions ?? [] }))
+  if (parsed === null) return failed('options', JSON.stringify({ fork: forked.options, asked: wrap?.actions ?? [] }))
   if (epoch !== deckEpoch) return
   const shown = parsed
   const sends = optionSends(shown.options, wrap)
@@ -3123,7 +3134,9 @@ export const register: Register = (on, _options) => {
       const permission = permissionThisTurn
       void (async () => {
         if (permission) return
-        if (asked !== null) return fillDeck($, e.answer, asked, epoch, cards, true)
+        if (asked !== null) {
+          return fillDeck($, e.answer, asked, epoch, cards, true).catch(() => epoch === deckEpoch ? visualsFailed($, asked.ask) : undefined)
+        }
         const wrap = wrapUpAsk(await $.session.messages().catch(() => []))
         if (wrap !== null || looksLikeDecision(e.answer)) await fillDeck($, withoutGist(e.answer), wrap, epoch, cards)
       })().catch(() => undefined)
@@ -4727,6 +4740,10 @@ export const register: Register = (on, _options) => {
           what === '' ? null : <Box key="deck-what"><Text wrap="wrap">{what}</Text></Box>,
           ...diagramRows,
           more,
+          // Nothing below the question is said, so a blank pane never reads as a broken one (#160).
+          what !== '' || offered.length > 0 || held.grant !== undefined ? null : (
+            <Box key="deck-none"><Text dimColor wrap="wrap">{held.visualsFailed === true ? 'The visuals for this decision could not be drawn.' : 'No visuals for this decision yet.'}</Text></Box>
+          ),
         ]
     // The choose button sits at the pane's foot on every tab, so it never moves as the person compares (the design review of #134);
     // it says the option it chooses (issue 140).

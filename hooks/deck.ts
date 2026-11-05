@@ -276,14 +276,16 @@ export const FORK_PROMPT =
   'the recommended one, its option written exactly as in options. The person reads each page on its own tab, one ' +
   'screen with no scrolling, and is not a specialist in this field: write in plain words. what: one sentence on what ' +
   'the option is, for someone who has never heard of it. diagrams: 3 to 5. ' + DIAGRAMS_GUIDE + ' Use only what the ' +
-  'reply, the session or the files you read state; a guess says so ("untested"). If there is no real choice, reply {}.'
+  'reply, the session or the files you read state; a guess says so ("untested").'
+/** The way out for a decision guessed from a reply; a question the agent asked always has one (#160). */
+const NO_CHOICE = ' If there is no real choice, reply {}.'
 
 /** The fork's prompt, told the wrap-up box's question when the reply asked there. */
 export function forkPrompt(wrap: WrapUpAsk | null): string {
-  if (wrap === null) return FORK_PROMPT
+  if (wrap === null) return FORK_PROMPT + NO_CHOICE
   return `${FORK_PROMPT} You asked the question in the end-of-turn box, not in your reply text:\n${wrapUpLines(wrap)}\n` +
     'Your options are its buttons\' labels, copied exactly and in their order: ' +
-    'a deck whose options differ from them is dropped.'
+    'a deck whose options differ from them is dropped. This is a real choice even as a plain yes or no: describe it.'
 }
 
 /** The fork may wrap its JSON in prose or a fence: take the outermost braces. */
