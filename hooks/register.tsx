@@ -4742,7 +4742,9 @@ export const register: Register = (on, _options) => {
           more,
           // Nothing below the question is said, so a blank pane never reads as a broken one (#160).
           what !== '' || offered.length > 0 || held.grant !== undefined ? null : (
-            <Box key="deck-none"><Text dimColor wrap="wrap">{held.visualsFailed === true ? 'The visuals for this decision could not be drawn.' : 'No visuals for this decision yet.'}</Text></Box>
+            <Box key="deck-none">{held.visualsFailed === true
+              ? <Text color="error" wrap="wrap">The visuals for this decision could not be drawn.</Text>
+              : <Text dimColor wrap="wrap">No visuals for this decision yet.</Text>}</Box>
           ),
         ]
     // The choose button sits at the pane's foot on every tab, so it never moves as the person compares (the design review of #134);
