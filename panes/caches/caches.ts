@@ -131,12 +131,53 @@ export function stateOf(c: Cache, now: number): Seen {
   return { ...c, left, fraction: Math.max(0, Math.min(1, left / ttl)), state }
 }
 
+/** Sibling folders of one stem before their sessions read as one batch. */
+export const RUNS_AT = 5
+
+/** `eval` for the temp folder `eval-zk4_p6r7`: what a folder's maker named it, without the random tail. */
+const stemOf = (project: string) => (project.includes(' ⎇ ') ? undefined : project.match(/^(.+?)[-_][A-Za-z0-9_]{6,}$/)?.[1])
+
+/**
+ * Each batch of one-shot sessions as a single cache, `312 eval runs` (issue #161). A script
+ * that runs `claude -p` per item in a fresh temp folder leaves a real transcript for each, and
+ * nobody returns to any of them. A batch is at least RUNS_AT folders of one stem, so sessions
+ * sharing one folder like `my-workspace` are never one, and a session the desktop holds
+ * stays its own row. The batch counts as warm until its newest run cools, and holds only what its
+ * warm runs hold.
+ */
+function collapseRuns(caches: readonly Cache[], now: number): Cache[] {
+  const stems = new Map<string, Cache[]>()
+  for (const c of caches) {
+    const stem = c.kind === 'session' && c.desk === undefined ? stemOf(c.project) : undefined
+    if (stem !== undefined) stems.set(stem, [...(stems.get(stem) ?? []), c])
+  }
+  const batches = [...stems].filter(([, runs]) => new Set(runs.map(c => c.project)).size >= RUNS_AT)
+  const batched = new Set(batches.flatMap(([, runs]) => runs))
+  return [
+    ...caches.filter(c => !batched.has(c)),
+    ...batches.map(([stem, runs]): Cache => {
+      const newest = runs.reduce((a, b) => (b.expiresAt > a.expiresAt ? b : a))
+      const warm = runs.filter(c => c.expiresAt > now)
+      const sum = (of: (c: Cache) => number) => runs.reduce((total, c) => total + of(c), 0)
+      return {
+        ...newest,
+        file: `runs:${stem}`,
+        project: stem,
+        title: `${runs.length} ${stem} runs`,
+        prefix: (warm.length > 0 ? warm : runs).reduce((total, c) => total + c.prefix, 0),
+        read: sum(c => c.read),
+        sent: sum(c => c.sent),
+      }
+    }),
+  ]
+}
+
 /**
  * Every cache as it stands at `now`: the warm soonest to cool first, then the cold most recently
  * cooled first, since a cold cache needs no eye. One cold past COLD_KEEP_MS is gone.
  */
 export function cachesAt(caches: readonly Cache[], now: number): Seen[] {
-  const all = caches.map(c => stateOf(c, now)).filter(c => c.left > -COLD_KEEP_MS)
+  const all = collapseRuns(caches.filter(c => c.expiresAt - now > -COLD_KEEP_MS), now).map(c => stateOf(c, now))
   const warm = all.filter(c => c.state !== 'cold').sort((a, b) => a.left - b.left)
   const cold = all.filter(c => c.state === 'cold').sort((a, b) => b.left - a.left)
   return [...warm, ...cold]

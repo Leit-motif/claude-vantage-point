@@ -169,6 +169,12 @@ const TOURED_KEY = 'toured'
 const CACHES_PANE = 'human-queue-caches'
 /** How often the transcripts are read again for their caches; a scan takes about 0.2 s. */
 const CACHE_SCAN_MS = 15_000
+/**
+ * The Caches rows drawn as Clients. A session's Clients share one frame, and the desktop tears it
+ * down, failing every row at once, past 400 messages a second (issue #161); a row mounts with
+ * several. The rows past this are plain: they take no click.
+ */
+const CLIENT_ROWS = 60
 /** The cells a Caches row keeps at its leading edge for its marker. */
 const MARK_CELLS = 2
 /** What each kind of the Caches pane's filter is called in its menu, in the menu's order. */
@@ -4448,7 +4454,8 @@ export const register: Register = (on, _options) => {
             <Text dimColor>{all.length === 0 ? 'No cache in the last hour.' : 'The filter hides every cache.'}</Text>
           </Box>
         )}
-        {shown.map(({ cache: c, depth }) => {
+        {shown.map(({ cache: c, depth }, index) => {
+          const clickable = Client !== undefined && index < CLIENT_ROWS
           const tone = CACHE_TONE[c.state]
           const left = Math.round(c.fraction * 1000) / 10
           // The bar fills its column whatever the pane's width: the markup is wider than any pane, so
@@ -4474,7 +4481,7 @@ export const register: Register = (on, _options) => {
             // where the desktop knows one.
             // Every row and the header are inset a cell, so the lift clears the text (issue 62); a
             // child's elbow sits under its parent's title.
-            <Box key={`cache-${c.file}`} flexDirection="row" columnGap={1} alignItems="flex-start" paddingLeft={1 + (depth > 0 ? gutter : 0) + Math.max(0, Math.min(depth, 2) - 1) * (MARK_CELLS + 1)} paddingRight={1} paddingY={0.25} {...(Client !== undefined ? { hover: { backgroundColor: CARD_LINE } } : {})}>
+            <Box key={`cache-${c.file}`} flexDirection="row" columnGap={1} alignItems="flex-start" paddingLeft={1 + (depth > 0 ? gutter : 0) + Math.max(0, Math.min(depth, 2) - 1) * (MARK_CELLS + 1)} paddingRight={1} paddingY={0.25} {...(clickable ? { hover: { backgroundColor: CARD_LINE } } : {})}>
               {markColumn && (
                 <Box width={MARK_CELLS} flexShrink={0}>
                   {mark !== null && Svg !== undefined && <Svg source={mark.source} alt={mark.alt} width={14} height={19} />}
@@ -4482,7 +4489,7 @@ export const register: Register = (on, _options) => {
               )}
               {/* minWidth 0 lets a long facts line cut at the column's edge instead of widening it. */}
               <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-                {Client !== undefined ? (
+                {clickable ? (
                   <Client
                     key={`open:${c.file}`}
                     width="100%"
