@@ -42,7 +42,7 @@ export const TOUR_STOPS: readonly TourStop[] = [
     key: 'agent',
     name: 'Agent row',
     does: 'What the agent is on, from its task tool or the ticket its branch names, and its steps.',
-    look: 'Above the prompt; press its title for the steps.',
+    look: 'Above the prompt; press its title for the steps, and ↙ to fold the band into the footer.',
     act: 'send',
     prompt:
       `${TOUR}, the agent row: call the vantage-point task tool with a task of a few words about surveying this project, ` +

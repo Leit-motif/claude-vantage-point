@@ -428,6 +428,8 @@ declare module 'claude-code' {
       peek: 'human' | 'agent' | null
       /** The Reader holding the band; null while the band shows its rows. */
       reading: HumanQueueReading
+      /** The band folded to its one-row group (issue 162). */
+      bandMinimized: boolean
       /** The waiting count last acknowledged: the baseline, an open, or an expired new-ask mark. */
       seenWaiting: number | null
       /** When the current rise started; null when the pill shows the steady count. */

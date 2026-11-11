@@ -278,6 +278,8 @@ const ticketPage = atom({ plugin: 'vantage-point', key: 'ticketPage' } as const,
 const peek = atom({ plugin: 'vantage-point', key: 'peek' } as const, null as 'human' | 'agent' | null)
 /** The Reader holding the band (issue #35); null while the band shows its rows. */
 const reading = atom({ plugin: 'vantage-point', key: 'reading' } as const, null as HumanQueueReading)
+/** The band folded to its one-row group above the composer (issue 162); the Reader returns to it when it ends. */
+const bandMinimized = atom({ plugin: 'vantage-point', key: 'bandMinimized' } as const, false)
 /** The waiting count last time the queue was opened, or when a new-ask mark expired. */
 const seenWaiting = atom({ plugin: 'vantage-point', key: 'seenWaiting' } as const, null as number | null)
 /** When the current rise started; null when the pill shows the steady count. */
@@ -914,6 +916,26 @@ async function engineBase($: $): Promise<string | undefined> {
 
 /** `Caches (4)`: the pane's title counts the warm caches, the number the footer's pill shows. */
 const cachesTitle = (held: readonly HumanQueueCache[], now: number) => `Caches (${cachesAt(held, now).filter(isWarm).length})`
+
+/**
+ * What the folded band shows in the footer (issue 162), read as the band reads its rows: whether the agent
+ * row's dot is blue (a ticket on this branch, a declared task, or steps), this project's ready tickets (the
+ * agent pill's first number, every repository's without a frontier read here), and this project's asks.
+ */
+async function foldedCounts($: $): Promise<{ working: boolean; ready: number | null; waiting: number }> {
+  const repoHere = (await read($, here))?.toLowerCase() ?? null
+  const open = await openRequests($)
+  const waiting = open.filter(r => r.issue === undefined || (repoHere !== null && r.issue.repo.toLowerCase() === repoHere)).length
+  const branch = await read($, agentBranch)
+  const heldTicket = await read($, agent)
+  const isTicket = branch.state === 'ticket' && heldTicket?.key === branch.key
+  const declared = await read($, task)
+  const heldSteps = (await read($, stepsHere)) ? await read($, steps) : []
+  const working = isTicket || (declared !== null && branch.state !== 'ticket') || heldSteps.length > 0
+  const heldFrontier = await read($, frontier)
+  const projectReady = repoHere !== null && heldFrontier.state === 'read' && heldFrontier.repo.toLowerCase() === repoHere ? readyCount(heldFrontier.frontier) : null
+  return { working, ready: projectReady ?? (await read($, observations)).ready?.value ?? null, waiting }
+}
 
 async function openCaches($: $): Promise<void> {
   await $.ui.open({ id: CACHES_PANE, title: cachesTitle((await read($, caches)).caches, await $.clock.now()), focus: true })
@@ -3651,6 +3673,9 @@ export const register: Register = (on, _options) => {
         </Box>
       )
     }
+    // Folded (issue 162), the band draws nothing, so the app drops its row, and the footer holds the
+    // fold's group. The Reader above still takes the band while it reads, and gives it back folded.
+    if (await read($, bandMinimized)) return next(e)
     const open = await openRequests($)
     // Left is the project, right is everything (issue #10). The left names only
     // an ask of this session's repo, or of the project folder's human-queue.md,
@@ -3734,6 +3759,7 @@ export const register: Register = (on, _options) => {
     const waitingText = waitingNow !== null && seen !== null && since !== null && waitingNow > seen && now - since < NEW_ASK_MS
       ? `${waitingNow - seen} (${waitingNow})`
       : steady
+    const showsBook = e.props.view.agentId === undefined && Svg !== undefined
     // Labels are always text; the owner declined an emoji fallback.
     // One label column, as wide as its longest label, so every title starts at one edge.
     const labelWidth = 'subagents'.length
@@ -3756,10 +3782,9 @@ export const register: Register = (on, _options) => {
     const perCell = e.surface === 'terminal' ? 1 : DESKTOP_CHARS_PER_CELL
     // Cells before a title: the band's padding, the label column, the dot and the number, each with its gap.
     const lead = 2 + labelWidth + 1 + 1 + 1 + (chipWidth === 0 ? 0 : chipWidth + 1)
-    const showsBook = e.props.view.agentId === undefined && Svg !== undefined
     // The session banner (issue 119): its pill once this session has an edit; the strip, drawn below.
     const edited = showsBook ? await read($, bannerEdits) : []
-    const agentRoom = titleRoom(e.props.bodyColumns - lead, showsBook ? [readyText, ...(edited.length > 0 ? ['👁️'] : []), '📖'] : [readyText], perCell)
+    const agentRoom = titleRoom(e.props.bodyColumns - lead, showsBook ? [readyText, ...(edited.length > 0 ? ['👁️'] : []), '📖', '↙'] : [readyText, '↙'], perCell)
     const followUp = 'Needs follow-up:'
     const youRoom = titleRoom(e.props.bodyColumns - lead - (isFollowUp ? Math.ceil(followUp.length / perCell) + 1 : 0), [waitingText], perCell)
     const close = () => update($, peek, () => null)
@@ -4073,6 +4098,8 @@ export const register: Register = (on, _options) => {
             <Button key="open-ready" label={readyText} variant="secondary" onPress={() => openFrontier($, repoHere !== null ? 'here' : 'all')} />,
             edited.length > 0 ? <Button key="open-banner" label="👁️" variant="secondary" onPress={() => toggleBanner($).then(() => undefined)} /> : null,
             showsBook ? <Button key="open-reader" label="📖" variant="secondary" onPress={openReader} /> : null,
+            // Folds the band down into the footer (issue 162): ↙ points where it goes, ↗ brings it back.
+            <Button key="minimize-band" label="↙" variant="secondary" onPress={() => update($, bandMinimized, () => true).then(() => close())} />,
           ],
         )}
         {/* The reply leads, then the agent; its subagents sit beneath it once one has run, so the
@@ -4377,18 +4404,31 @@ export const register: Register = (on, _options) => {
     const label = contextLabel(usage)
     const { Box, Button, Text } = $.ui.resolve(e)
     const context = label === null ? null : <Text color={(usage?.percent ?? 0) >= CONTEXT_HIGH ? SIGNAL_YELLOW : QUIET}>{label}</Text>
+    // The folded band (issue 162): ↗ first, which brings the band back, then 📖, then 👤 and this project's asks,
+    // which opens the human queue, then 🤖 and this project's ready tickets, which opens the Decision pane (the
+    // owner, 2026-11-10). The emoji keep their colours in a pill, as 📖 does, and say what each number counts.
+    const fold = (await read($, bandMinimized)) ? await foldedCounts($) : null
     return (
       <Box flexDirection="row" alignItems="center" columnGap={1}>
         {engine}
-        <Button key="caches-open" label={String(cachesAt(held, now).filter(isWarm).length)} onPress={() => openCaches($)} />
-        {mine !== undefined && (
-          <Text>
-            {'Cache '}
-            <Text color={CACHE_TONE[mine.state]}>{leftLabel(mine.left)}</Text>
-            {context}
-          </Text>
-        )}
-        {mine === undefined && context}
+        {fold === null ? null : [
+          <Button key="expand-band" label="↗" onPress={() => update($, bandMinimized, () => false)} />,
+          <Button key="open-reader" label="📖" onPress={() => startReader(readerIO($), turnRunning)} />,
+          <Button key="fold-you" label={`👤 ${fold.waiting}`} onPress={() => openPane($)} />,
+          <Button key="fold-agent" label={`🤖 ${fold.ready ?? '—'}`} onPress={() => $.ui.open({ id: DECISION_PANE, title: 'Decision', focus: true }).then(() => undefined)} />,
+        ]}
+        {/* The warm-cache count opens the Caches pane, the Cache label beside it saying what it counts (ADR 0007). */}
+        <Box key="cache-pair" flexDirection="row" alignItems="center" columnGap={1}>
+          <Button key="caches-open" label={String(cachesAt(held, now).filter(isWarm).length)} onPress={() => openCaches($)} />
+          {mine !== undefined && (
+            <Text>
+              {'Cache '}
+              <Text color={CACHE_TONE[mine.state]}>{leftLabel(mine.left)}</Text>
+              {context}
+            </Text>
+          )}
+          {mine === undefined && context}
+        </Box>
       </Box>
     )
   })
@@ -4797,7 +4837,9 @@ export const register: Register = (on, _options) => {
     const tree = await (async () => {
     const elements = $.ui.resolve(e)
     const { Box, Button, Markdown, Text } = elements
-    const Input = 'Input' in elements ? elements.Input : undefined
+    // The phone keeps comment capture, its next message as the comment: engines from 2.1.321 hand the
+    // mobile surface an Input too, which nobody has yet seen draw or take dictation on the phone.
+    const Input = e.surface !== 'mobile' && 'Input' in elements ? elements.Input : undefined
     const Client = 'Client' in elements ? elements.Client : undefined
     // The terminal's table answers 'Svg' too, with a stand-in that draws nothing, so the surface decides.
     const Svg = e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : undefined
