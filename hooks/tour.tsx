@@ -129,10 +129,14 @@ export type TourElements = {
 export function setupLines(setup: TourSetup): { key: string; name: string; fact: string; waits: boolean }[] {
   const system =
     setup.platform === 'macos'
-      ? { fact: 'macOS · the system Vantage Point runs on for now', waits: false }
-      : setup.platform === 'other'
-        ? { fact: 'not macOS · Vantage Point runs on macOS only for now, so some of it will not work here', waits: true }
-        : { fact: 'checking…', waits: false }
+      ? { fact: 'macOS · everything works here', waits: false }
+      : setup.platform === 'windows'
+        ? { fact: 'Windows · everything works here, but a large or tall picture opens on a press instead of drawing, and a video plays without its length', waits: false }
+        : setup.platform === 'windows-no-bash'
+          ? { fact: 'Windows without Git for Windows · install it for pictures and long sessions’ caches', waits: true }
+          : setup.platform === 'other'
+            ? { fact: 'not macOS or Windows · Vantage Point runs on those two, so some of it will not work here', waits: true }
+            : { fact: 'checking…', waits: false }
   const gh =
     setup.gh === 'signed-in'
       ? { fact: `signed in as ${setup.login} · asks filed as issues are read from its repositories`, waits: false }

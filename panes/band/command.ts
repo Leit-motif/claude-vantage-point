@@ -1,6 +1,7 @@
 // A background task's name when its call gave none (issue 126): the one step of its command
 // that does the work, named by a table of rules. Pure and deterministic; no model reads it.
 import { shortTitle } from './title.ts'
+import { baseName } from '../host.ts'
 
 /** Steps that set up, report or filter, and never name what a command is for. */
 const SETUP = new Set([
@@ -65,7 +66,7 @@ export function steps(command: string): string[][] {
   return out
 }
 
-const base = (path: string) => (path.split('/').filter(Boolean).at(-1) ?? path).replace(/\.(sh|py|mjs|mts|cjs|js|ts|rb|swift)$/, '')
+const base = (path: string) => baseName(path).replace(/\.(sh|py|mjs|mts|cjs|js|ts|rb|swift)$/, '')
 
 /** The step's words without its assignments, wrappers and redirections. */
 function core(words: readonly string[]): string[] {

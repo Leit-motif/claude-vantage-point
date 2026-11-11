@@ -5,7 +5,7 @@
 // outside Claude Code (issue #55), so its imports name their files for node.
 import { cacheOf, COLD_KEEP_MS, readTail, TAIL_BYTES, TTL_MS } from '../panes/caches/caches.ts'
 import type { Cache, CacheState } from '../panes/caches/caches.ts'
-import { deskOf, DESKTOP_SESSIONS, parseDesktopSession } from '../panes/caches/sessions.ts'
+import { deskOf, parseDesktopSession } from '../panes/caches/sessions.ts'
 import type { DesktopSession } from '../panes/caches/sessions.ts'
 import { QUIET, RECOMMENDED, SIGNAL_RED, SIGNAL_YELLOW } from './signal.ts'
 
@@ -79,11 +79,10 @@ export async function scanCaches(io: CacheIO, root: string, now: number, own: st
 export type SessionFiles = ReadonlyMap<string, { mtime: number; session: DesktopSession | null }>
 
 /**
- * Every desktop session file under `home` (issue #62). A file is about 55 kB and there can be
+ * Every desktop session file under `root`, the Host's `desktopSessions` (issues #62, 152). A file is about 55 kB and there can be
  * hundreds, most archived, so only those written since `previous` read them are read again.
  */
-export async function scanDesktopSessions(io: CacheIO, home: string, previous: SessionFiles = new Map()): Promise<Map<string, { mtime: number; session: DesktopSession | null }>> {
-  const root = `${home}/${DESKTOP_SESSIONS}`
+export async function scanDesktopSessions(io: CacheIO, root: string, previous: SessionFiles = new Map()): Promise<Map<string, { mtime: number; session: DesktopSession | null }>> {
   const dirs = async (path: string) => (await io.list(path).catch(() => [])).filter(e => e.kind === 'dir').map(e => `${path}/${e.name}`)
   const orgs = (await Promise.all((await dirs(root)).map(dirs))).flat()
   const files = (await Promise.all(orgs.map(async org =>

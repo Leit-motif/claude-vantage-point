@@ -2,7 +2,7 @@
 // can open it (issue #62). Pure: hooks/caches.ts lists and reads the files.
 //
 // The desktop keeps one file per session, `<account>/<org>/local_<id>.json` under
-// DESKTOP_SESSIONS, whose `cliSessionId` is the transcript's file name. Its link,
+// the Host's `desktopSessions` (panes/host.ts), whose `cliSessionId` is the transcript's file name. Its link,
 // `claude://claude.ai/epitaxy/local_<id>`, opened with `open`, shows that session in the main
 // window's pane (tried 2026-10-18 on the desktop's 2.42304.0). No form of it opens a pop-out: the
 // app routes every claude:// link to its main window.
@@ -10,9 +10,6 @@ import type { Cache } from './caches'
 import { transcriptId } from './caches.ts'
 
 export { transcriptId }
-
-/** Under the home folder: one folder per account, one per organisation in it, a file per session. */
-export const DESKTOP_SESSIONS = 'Library/Application Support/Claude/claude-code-sessions'
 
 /**
  * What one session file says: its transcript's id, its own, whether it is archived, whether a pull

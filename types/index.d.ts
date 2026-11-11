@@ -356,7 +356,8 @@ export type HumanQueueGrading = { at: number; picks: Record<string, { pick: stri
  * is the `X.Y.Z` `gh --version` printed, null when it printed none.
  */
 export type VantageTourSetup = {
-  platform: 'macos' | 'other' | 'unknown'
+  /** `windows-no-bash`: Windows without Git for Windows, which runs the large-transcript read and the picture fetch (issue 152). */
+  platform: 'macos' | 'windows' | 'windows-no-bash' | 'other' | 'unknown'
   gh: 'signed-in' | 'signed-out' | 'missing' | 'unknown'
   ghVersion: string | null
   login: string | null

@@ -2,6 +2,8 @@
 // ruled on; a commit names its issue, or cites an ADR outright; so each file a commit touched
 // binds to those ADRs, once per commit. Pure: register.tsx runs git and reads the files.
 
+import { slashed } from '../host.ts'
+
 /**
  * One ADR: its number, the number and the words its file name writes (`0037`, `two picture card`),
  * its title, whether it is Accepted or superseded (neither: Proposed), and the issues it was ruled on.
@@ -96,6 +98,9 @@ export function governing(bindings: Bindings, path: string): number | null {
 
 /** `abs` relative to `root`, or null when it lies outside it. */
 export function relativeTo(root: string, abs: string): string | null {
-  const base = root.endsWith('/') ? root : `${root}/`
-  return abs.startsWith(base) ? abs.slice(base.length) : null
+  // git answers `C:/x` on Windows where a tool names `C:\x\y`, so both compare with `/`s (issue 152).
+  const slashedRoot = slashed(root)
+  const base = slashedRoot.endsWith('/') ? slashedRoot : `${slashedRoot}/`
+  const path = slashed(abs)
+  return path.startsWith(base) ? path.slice(base.length) : null
 }

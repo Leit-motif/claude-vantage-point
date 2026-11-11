@@ -4,13 +4,13 @@
 
 A heads-up display for Claude Code. See what your agents are doing, turn their questions into clear choices, and answer what they need from you across your projects, without leaving the session you're in.
 
-Claude Code desktop app · macOS · Open source · Early preview
+Claude Code desktop app · macOS and Windows · Open source · Early preview
 
 ![The reply row lights above the Claude Code prompt with the agent's question, the recommended option green; the decision deck opens with each option as a page of diagrams; pressing the option sends it as the reply](media/demo.gif)
 
 ## Install
 
-You need the Claude Code desktop app on macOS. Everything that reads GitHub (asks filed as issues, the counts and the frontier) also needs the GitHub CLI, `gh` 2.94.0 or newer, signed in.
+You need the Claude Code desktop app on macOS or Windows; on Windows, also Git for Windows, which Claude Code recommends there for its Bash tool. Everything that reads GitHub (asks filed as issues, the counts and the frontier) also needs the GitHub CLI, `gh` 2.94.0 or newer, signed in.
 
 In a terminal:
 
@@ -106,7 +106,7 @@ Vantage Point runs inside Claude Code on your machine. It has no server of its o
 
 ## Compatibility and limitations
 
-- **macOS only, for now.** This release supports the Claude Code desktop app on macOS. Windows comes in a later update.
+- **macOS and Windows.** On Windows a picture on a card draws only when it is small and not tall, else Open shows it, and a video's Play button shows no length: macOS's image and audio tools, which shrink a picture and read a film's length, have no Windows counterpart. Without Git for Windows, pictures and the caches of long sessions do not load.
 - **Drawn in the desktop app.** The band, panes and reader draw in the desktop app's Code tab. Cloud sessions on claude.ai draw no mods.
 - **Early preview.** Vantage Point is 0.x, so its formats may still change, and Claude Code's mod API is early access and changes between releases.
 - **Your workflow, as it is.** Vantage Point reads Matt Pocock's triage labels and follows his states, under your repository's own names when its `docs/agents/triage-labels.md` renames them, and never changes that setup. Where your repository works differently, with other labels, branch names or decision-record folders, the tour's **Your workflow** stop proposes the difference for you to rule on ([conventions](#conventions)).

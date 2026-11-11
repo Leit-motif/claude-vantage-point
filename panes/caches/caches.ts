@@ -27,6 +27,31 @@ export const EXPIRING_FRACTION = 0.05
  * clock. A user line names its type in its first few hundred characters and can carry megabytes of
  * images after it, so it is matched by a plain search of its start, never a pattern over the line.
  */
+/** The sh line that runs RESPONSES_AWK (`$1`) over a transcript (`$2`) and keeps its last 120 lines. */
+export const RESPONSES_SH = 'awk "$1" "$2" | tail -n 120'
+
+/**
+ * RESPONSES_AWK and RESPONSES_SH in JS, for a host with no shell (Windows without Git for Windows,
+ * issue 152): the same three plain searches, the same last 120 lines. scripts/caches.test.mts
+ * holds the two to the same output.
+ */
+export function responsesOf(text: string): string {
+  const out: string[] = []
+  for (const line of text.split('\n')) {
+    if (line === '') continue
+    const head = line.slice(0, 300)
+    if (head.includes('"type":"user"')) {
+      const i = line.indexOf('"timestamp":"')
+      if (i >= 0) {
+        const t = line.slice(i + 13, i + 53)
+        const end = t.indexOf('"')
+        out.push(`{"type":"user","timestamp":"${end < 0 ? t : t.slice(0, end)}"}`)
+      }
+    } else if (head.includes('"type":"custom-title"') || line.includes('"type":"assistant"')) out.push(line)
+  }
+  return out.slice(-120).join('\n') + (out.length > 0 ? '\n' : '')
+}
+
 export const RESPONSES_AWK = String.raw`{ p = substr($0, 1, 300) }
 index(p, "\"type\":\"user\"") { i = index($0, "\"timestamp\":\""); if (i) { t = substr($0, i + 13, 40); print "{\"type\":\"user\",\"timestamp\":\"" substr(t, 1, index(t, "\"") - 1) "\"}" } next }
 index(p, "\"type\":\"custom-title\"") || index($0, "\"type\":\"assistant\"") { print }`

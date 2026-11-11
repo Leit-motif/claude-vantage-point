@@ -6,6 +6,9 @@
 // an item holds, how the mod fetches each through the person's own `gh` login,
 // and how one fits the pane. Pure: hooks/pictures.ts does the I/O.
 
+import { bytesOf, headerOfBase64 } from './header.ts'
+import { type Host, isAbsolute, resolveIn, shArgv } from '../host.ts'
+
 /** One picture an item embeds; `video` when it is a film, which the card offers as a Play button that opens it (#132). */
 export type Picture = { alt: string; url: string; video?: true }
 
@@ -76,9 +79,9 @@ export function fetchOf(url: string, root: string): Fetch | null {
   }
   if (/^https:\/\/github\.com\/user-attachments\/assets\/[\w-]+$/.test(url)) return { kind: 'attachment', url }
   if (/^https:\/\//.test(url)) return { kind: 'web', url }
-  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return null
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url) && !isAbsolute(url)) return null
   const path = decodeURIComponent(url.replace(/^file:\/\//, ''))
-  return { kind: 'file', path: path.startsWith('/') ? path : `${root.replace(/\/$/, '')}/${path}` }
+  return { kind: 'file', path: resolveIn(root, path) }
 }
 
 /** The size a `width` by `height` picture draws at to fit `room` across and `tall` down, never past its own size. */
@@ -125,7 +128,9 @@ export const PICTURE_MAX = 120_000
  */
 export function pictureSvg(base64: string, width: number, height: number): string | null {
   // An AVIF opens with a box size, then `ftypavif`, which base64 spells from the sixth character on.
-  const type = base64.startsWith('/9j/') ? 'jpeg' : base64.slice(5, 16) === 'GZ0eXBhdmlm' ? 'avif' : 'png'
+  // Windows draws a GIF or WebP as fetched (issue 152), which only its bytes 0 and 8 tell apart.
+  const webp = base64.startsWith('UklGR') && String.fromCharCode(...bytesOf(base64, 16).subarray(8, 12)) === 'WEBP'
+  const type = base64.startsWith('/9j/') ? 'jpeg' : base64.slice(5, 16) === 'GZ0eXBhdmlm' ? 'avif' : base64.startsWith('R0lGOD') ? 'gif' : webp ? 'webp' : 'png'
   const uri = `data:image/${type};base64,${base64}`
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
@@ -188,6 +193,15 @@ export function fetchArgs(fetch: Fetch, strip: Strip = { top: 0, rows: 0, most: 
 }
 
 
+/** The fetch both picture scripts share: the picture into "$tmp" by its kind, `ok` 0 once it is in, the gh token inside the shell. */
+const FETCH_INTO = `  case $kind in
+    contents) for ep in "$@"; do gh api -H 'Accept: application/vnd.github.raw' "$ep" > "$tmp" 2>/dev/null && { ok=0; break; }; done ;;
+    attachment) curl -fsSL --max-time 20 -H "Authorization: token $(gh auth token)" -o "$tmp" "$1" && ok=0 ;;
+    web) curl -fsSL --max-time 20 -o "$tmp" "$1" && ok=0 ;;
+    file) cp "$1" "$tmp" && ok=0 ;;
+  esac
+`
+
 /**
  * Fetches one picture into the cache once, as a PNG at most 1280px wide (a pane at
  * 2x needs about 1200), and prints its file, width and height, then the base64 of
@@ -213,13 +227,7 @@ if [ ! -s "$out" ]; then
   rm -f "$dir/$name".strip-*.copy "$dir/$name.padded.png"
   tmp=$(mktemp "$dir/.fetch.XXXXXX") || exit 3
   ok=1
-  case $kind in
-    contents) for ep in "$@"; do gh api -H 'Accept: application/vnd.github.raw' "$ep" > "$tmp" 2>/dev/null && { ok=0; break; }; done ;;
-    attachment) curl -fsSL --max-time 20 -H "Authorization: token $(gh auth token)" -o "$tmp" "$1" && ok=0 ;;
-    web) curl -fsSL --max-time 20 -o "$tmp" "$1" && ok=0 ;;
-    file) cp "$1" "$tmp" && ok=0 ;;
-  esac
-  if [ $ok -ne 0 ] || ! sips -s format png "$tmp" --out "$out" >/dev/null 2>&1; then rm -f "$tmp" "$out"; exit 4; fi
+${FETCH_INTO}  if [ $ok -ne 0 ] || ! sips -s format png "$tmp" --out "$out" >/dev/null 2>&1; then rm -f "$tmp" "$out"; exit 4; fi
   rm -f "$tmp"
   set -- $(size "$out")
   if [ "$1" -gt 1280 ]; then sips --resampleWidth 1280 "$out" >/dev/null 2>&1; fi
@@ -263,6 +271,73 @@ base64 -i "$view" | tr -d '\\n'
 `
 
 export type Loaded = { file: string; width: number; height: number; base64: string }
+
+/**
+ * FETCH_SCRIPT for a host with no sips, Windows' Git Bash (issue 152): it fetches one
+ * picture into the cache once, as it is, named by its type, and prints its file, then
+ * base64: of its first 256 KiB when `most` is 0, for its size, else of the whole of it,
+ * or exit 5 when that would pass `most`. Its size is read from those bytes (header.ts),
+ * and it is never converted, shrunk or cut into strips. `$1` is the cache folder, `$2`
+ * the cache name, `$3` most, `$4` the kind, the rest its arguments, as FETCH_SCRIPT's.
+ */
+export const PLAIN_FETCH_SCRIPT = `set -u
+dir="$1/pictures"
+name=$2; most=$3; kind=$4; shift 4
+mkdir -p "$dir" || exit 3
+out=
+for one in "$dir/$name".full.*; do [ -s "$one" ] && out=$one; done
+if [ -z "$out" ]; then
+  tmp=$(mktemp "$dir/.fetch.XXXXXX") || exit 3
+  ok=1
+${FETCH_INTO}  [ $ok -eq 0 ] || { rm -f "$tmp"; exit 4; }
+  case $(file -b --mime-type "$tmp") in
+    image/png) ext=png ;;
+    image/jpeg) ext=jpg ;;
+    image/gif) ext=gif ;;
+    image/webp) ext=webp ;;
+    *) rm -f "$tmp"; exit 4 ;;
+  esac
+  out="$dir/$name.full.$ext"
+  mv "$tmp" "$out" || exit 3
+fi
+if command -v cygpath >/dev/null 2>&1; then cygpath -w "$out"; else printf '%s\\n' "$out"; fi
+if [ "$most" -eq 0 ]; then head -c 262144 "$out" | base64 | tr -d '\\n'; exit 0; fi
+[ "$(wc -c < "$out")" -le $((most * 3 / 4)) ] || exit 5
+base64 < "$out" | tr -d '\\n'
+`
+
+/** How one picture's strip is fetched on a host: the argv, and which script's output it prints. */
+export type PictureRun = { argv: string[]; plain: boolean }
+
+/**
+ * The run that fetches `strip` of a picture, or why there is none: 'failed' where the
+ * host has no shell or cache, 'too large' for a strip only sips can cut, so the card
+ * offers Open in its place.
+ */
+export function pictureRun(host: Host, name: string, fetch: Fetch, strip: Strip): PictureRun | 'failed' | 'too large' {
+  if (host.os === 'macos') return { argv: shArgv(host, FETCH_SCRIPT, name, ...fetchArgs(fetch, strip))!, plain: false }
+  if (strip.rows > 0) return 'too large'
+  const argv = host.cache === null ? null : shArgv(host, PLAIN_FETCH_SCRIPT, host.cache, name, String(Math.max(0, strip.most)), ...fetchArgs(fetch, strip).slice(3))
+  return argv === null ? 'failed' : { argv, plain: true }
+}
+
+/** PLAIN_FETCH_SCRIPT's output as the file and base64 it printed, with the size its header holds. */
+function plainOf(stdout: string): Loaded | null {
+  const [file, base64] = stdout.split('\n').map(line => line.replace(/\r$/, ''))
+  if (file === undefined || file === '' || base64 === undefined || !/^[A-Za-z0-9+/]+=*$/.test(base64)) return null
+  const header = headerOfBase64(base64)
+  return header === null ? null : { file, width: header.width, height: header.height, base64 }
+}
+
+/** A size run's output, by the script that printed it. */
+export function sizeFrom(run: PictureRun, stdout: string): { file: string; width: number; height: number } | null {
+  if (!run.plain) return sizeOf(stdout)
+  const loaded = plainOf(stdout)
+  return loaded === null ? null : { file: loaded.file, width: loaded.width, height: loaded.height }
+}
+
+/** A strip run's output, by the script that printed it. */
+export const loadedFrom = (run: PictureRun, stdout: string): Loaded | null => (run.plain ? plainOf(stdout) : loadedOf(stdout))
 
 /** FETCH_SCRIPT's first three lines, with rows -1: the picture's file and size. */
 export function sizeOf(stdout: string): { file: string; width: number; height: number } | null {
@@ -321,6 +396,26 @@ esac
 seconds=$(afinfo "$film" 2>/dev/null | awk '/estimated duration/ {print $3; exit}')
 printf '%s\\n%s\\n' "$film" "$seconds"
 `
+
+const VIDEO_DIR = 'dir="$HOME/Library/Caches/vantage-point/videos"\n'
+const VIDEO_PRINT = "printf '%s\\n%s\\n' \"$film\" \"$seconds\"\n"
+
+/**
+ * VIDEO_SCRIPT for Windows' Git Bash (issue 152): `$1` is the cache folder, the rest as
+ * VIDEO_SCRIPT's, and it prints the film's path as Windows spells it. Git Bash has
+ * `file` but no afinfo, so the length comes back empty and Play shows none.
+ */
+export const WINDOWS_VIDEO_SCRIPT = VIDEO_SCRIPT.replace(VIDEO_DIR, 'dir="$1/videos"; shift\n').replace(
+  VIDEO_PRINT,
+  `command -v cygpath >/dev/null 2>&1 && film=$(cygpath -w "$film")\n${VIDEO_PRINT}`,
+)
+
+/** The argv that fetches one video on `host`, or null where it has no shell or cache. */
+export function videoArgv(host: Host, name: string, fetch: Exclude<Fetch, { kind: 'contents' }>): string[] | null {
+  const src = fetch.kind === 'file' ? fetch.path : fetch.url
+  if (host.os === 'macos') return shArgv(host, VIDEO_SCRIPT, name, fetch.kind, src)
+  return host.cache === null ? null : shArgv(host, WINDOWS_VIDEO_SCRIPT, host.cache, name, fetch.kind, src)
+}
 
 /** VIDEO_SCRIPT's output as a video, or null when it names no film. */
 export function videoOf(stdout: string): Video | null {

@@ -127,8 +127,10 @@ import type { NativeCard } from './native-card'
 import { CARD_LINE, FILL, MERGED, PANE as GROUND, QUIET, RECOMMENDED, REST_LINE, SIGNAL_BLUE, SIGNAL_GOLD, SIGNAL_RED, SIGNAL_YELLOW, TEXT } from './signal'
 import { CACHE_TONE, linkDesks, projectsRoot, scanCaches, scanDesktopSessions } from './caches'
 import type { CacheIO, SessionFiles } from './caches'
-import { cachesAt, facts as factsOf, hitLabel, isChild, isWarm, kindCounts, leftLabel, passes, RESPONSES_AWK, SHOW_ALL, stateOf, tokens, touch, treeOf } from '../panes/caches/caches'
+import { cachesAt, facts as factsOf, hitLabel, isChild, isWarm, kindCounts, leftLabel, passes, RESPONSES_AWK, RESPONSES_SH, responsesOf, SHOW_ALL, stateOf, tokens, touch, treeOf } from '../panes/caches/caches'
 import type { CacheFilter, Seen } from '../panes/caches/caches'
+import { baseName, bashCandidates, dateArgv, hostOf, openArgv, removeArgv, resolveIn, shArgv, tailArgv } from '../panes/host'
+import type { Host, HostEnv } from '../panes/host'
 import { sessionLink, sessionOf, transcriptId } from '../panes/caches/sessions'
 import { afterTurn, missedCache, PING, pingAt, readWarmth, toggled, UNARMED, warmFact, WARMTH_PREFIX, warmStateOf, warmthKey } from '../panes/caches/warm'
 import type { Warmth } from '../panes/caches/warm'
@@ -136,7 +138,7 @@ import { CONTEXT_HIGH, contextLabel } from '../panes/caches/context'
 import { freshBrief, handbackOf, isHandbackOf } from '../panes/human-queue/handback'
 import { screenSvg } from './screen'
 import { refusal } from './refusal'
-import { FETCH_SCRIPT, fetchArgs, fetchOf, legible, loadedOf, nameOf, NOT_A_FILM, pictureSvg, picturesOf, playLabel, SIZE, sizeOf, stripsOf, TREE_PICTURES, VIDEO_SCRIPT, videoOf, withoutPictures } from '../panes/human-queue/pictures'
+import { fetchOf, legible, loadedFrom, nameOf, NOT_A_FILM, pictureRun, pictureSvg, picturesOf, playLabel, SIZE, sizeFrom, stripsOf, TREE_PICTURES, videoArgv, videoOf, withoutPictures } from '../panes/human-queue/pictures'
 import type { Loaded, Picture, Strip, Video } from '../panes/human-queue/pictures'
 import type { Screen, ScreenRequest } from './screen'
 
@@ -355,7 +357,7 @@ let commentFolded = false
 // The pictures asks embed, by link: loaded, failed, or still fetching. In memory only, since a
 // picture's base64 is too big for the store; the PNG itself is cached on disk (issue 87).
 // Each strip is its own copy, so a tall mock stays sharp (#136): keyed by link and strip.
-const pictures = new Map<string, Loaded | 'failed' | 'pending'>()
+const pictures = new Map<string, Loaded | 'failed' | 'pending' | 'too large'>()
 // Each picture's size, by link, read before its strips are cut (#136).
 const pictureSizes = new Map<string, { file: string; width: number; height: number } | 'failed' | 'pending'>()
 // The videos asks embed, by link: fetched to disk, failed, or still fetching (#132).
@@ -419,8 +421,8 @@ function labelSearch($: $): Promise<LabelSearch> {
 
 /** The person's `~/.claude/vantage-point.json`, or null when there is none (issue 146). */
 async function personFile($: $): Promise<string | null> {
-  const home = (await $.env.get('HOME').catch(() => undefined)) ?? ''
-  return home === '' ? null : $.fs.read(`${home}/.claude/vantage-point.json`).then(String, () => null)
+  const { home } = await host($)
+  return home === null ? null : $.fs.read(`${home}/.claude/vantage-point.json`).then(String, () => null)
 }
 
 /**
@@ -531,8 +533,7 @@ function bucketOf(request: Request, project: string): string {
 
 /** The project folder's name: the bucket of human-queue.md's requests. */
 async function projectName($: $): Promise<string> {
-  const root = await $.session.root()
-  return root.split('/').filter(part => part !== '').pop() ?? root
+  return baseName(await $.session.root())
 }
 
 /** Open requests grouped by bucket, buckets in the order their first request appears. */
@@ -550,7 +551,6 @@ const pausesSeen = new Map<Budget, unknown>()
 
 /** GitHub's rate-limit pauses, one per budget, in the store every session reads. */
 /** Where every session writes down each call GitHub refused for a limit (#117), newest last. */
-const LIMITS_LOG = 'Library/Logs/vantage-point/github-limits.log'
 const LIMITS_LOG_LINES = 500
 
 function pauseIO($: $): PauseIO {
@@ -566,9 +566,9 @@ function pauseIO($: $): PauseIO {
       await $.store.set(`github-pause-${budget}`, hold).catch(() => undefined)
     },
     note: async refusal => {
-      const home = (await $.env.get('HOME')) ?? ''
-      if (home === '') return
-      const path = `${home}/${LIMITS_LOG}`
+      const { logs } = await host($)
+      if (logs === null) return
+      const path = `${logs}/github-limits.log`
       const kept = (await $.fs.exists(path)) ? String(await $.fs.read(path)).split('\n').filter(line => line !== '').slice(-(LIMITS_LOG_LINES - 1)) : []
       const session = await $.session.id().catch(() => '?')
       await $.fs.write(path, [...kept, `${refusalLine(refusal)} [session ${session.slice(0, 8)}]`].join('\n') + '\n')
@@ -775,13 +775,50 @@ async function openFrontier($: $, scope: 'here' | 'all' = 'here'): Promise<void>
   await $.ui.open({ id: FRONTIER_PANE, title: 'Frontier', focus: true })
 }
 
+/** Which Git for Windows bash each list of candidates found, so the disk is asked once per list. */
+const bashFound = new Map<string, Promise<string | null>>()
+
+/** The system this runs on (issue 152): its environment, and on Windows which Git for Windows bash is there. */
+async function host($: $): Promise<Host> {
+  const get = (value: string | undefined) => (typeof value === 'string' && value !== '' ? value : undefined)
+  const env: HostEnv = {
+    OS: get(await $.env.get('OS').catch(() => undefined)),
+    HOME: get(await $.env.get('HOME').catch(() => undefined)), // host-boundary: the host's own read
+    USERPROFILE: get(await $.env.get('USERPROFILE').catch(() => undefined)),
+    APPDATA: get(await $.env.get('APPDATA').catch(() => undefined)),
+    LOCALAPPDATA: get(await $.env.get('LOCALAPPDATA').catch(() => undefined)),
+    ProgramFiles: get(await $.env.get('ProgramFiles').catch(() => undefined)),
+    CLAUDE_CODE_GIT_BASH_PATH: get(await $.env.get('CLAUDE_CODE_GIT_BASH_PATH').catch(() => undefined)),
+  }
+  const candidates = bashCandidates(env)
+  if (candidates.length === 0) return hostOf(env)
+  const key = candidates.join('\n')
+  let found = bashFound.get(key)
+  if (found === undefined) {
+    found = (async () => {
+      for (const one of candidates) if (await $.fs.exists(one).catch(() => false)) return one
+      return null
+    })()
+    bashFound.set(key, found)
+  }
+  return hostOf(env, await found)
+}
+
+/** Opens a file or link the way a double click does, on either system. */
+const openOnHost = ($: $, target: string) => void host($).then(h => $.process.run(openArgv(h, target), { timeoutMs: 5000 })).catch(() => undefined)
+
 function cacheIO($: $): CacheIO {
   return {
-    home: async () => (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE')),
+    home: async () => (await host($)).home ?? undefined,
     list: path => $.fs.list(path),
     read: path => $.fs.read(path),
-    // The path rides as $1, never inside the script.
-    responses: async path => (await $.process.run(['/bin/sh', '-c', 'awk "$1" "$2" | tail -n 120', 'sh', RESPONSES_AWK, path])).stdout,
+    // The path rides as $2, never inside the script.
+    responses: async path => {
+      const argv = shArgv(await host($), RESPONSES_SH, RESPONSES_AWK, path)
+      // With no shell the file is read whole, up to the 4 MiB one read may copy.
+      if (argv === null) return responsesOf(await $.fs.read(path))
+      return (await $.process.run(argv)).stdout
+    },
   }
 }
 
@@ -801,8 +838,8 @@ async function scanCachesNow($: $): Promise<void> {
     const own = `${await $.session.id()}.jsonl`
     const found = await scanCaches(io, root, now, own, (await read($, caches)).caches)
     // Which desktop session each cache's row opens; with no home, none does.
-    const home = await io.home()
-    desktopSessions = home === undefined || home === '' ? new Map() : await scanDesktopSessions(io, home, desktopSessions)
+    const sessionsRoot = (await host($)).desktopSessions
+    desktopSessions = sessionsRoot === null ? new Map() : await scanDesktopSessions(io, sessionsRoot, desktopSessions)
     const linked = linkDesks(found, desktopSessions)
     await update($, caches, () => ({ at: now, caches: linked }))
     await readChildren($, linked, now).catch(() => undefined)
@@ -831,14 +868,15 @@ async function readChildren($: $, linked: readonly HumanQueueCache[], now: numbe
 
 /** A transcript's last 64 kB, or the whole file where `tail` cannot run. */
 async function transcriptTail($: $, file: string): Promise<string> {
-  const ran = await $.process.run(['tail', '-c', '65536', file], { timeoutMs: 5000 }).catch(() => undefined)
+  const argv = tailArgv(await host($), file, 65536)
+  const ran = argv === null ? undefined : await $.process.run(argv, { timeoutMs: 5000 }).catch(() => undefined)
   return ran?.exitCode === 0 ? ran.stdout : await $.fs.read(file).catch(() => '')
 }
 
 /** Shows a child session in the main window, as a Caches row's double click does (issues 62, 129). */
 async function openChildSession($: $, local: string): Promise<void> {
   const link = sessionLink(local)
-  const ran = link === null ? undefined : await $.process.run(['open', link], { timeoutMs: 5000 }).catch(() => undefined)
+  const ran = link === null ? undefined : await $.process.run(openArgv(await host($), link), { timeoutMs: 5000 }).catch(() => undefined)
   if (ran?.exitCode !== 0) $.ui.toast('The desktop did not open that session.')
 }
 
@@ -954,7 +992,7 @@ async function openCacheSession($: $, file: string): Promise<void> {
   const session = cache === undefined ? undefined : sessionOf(cache)
   const link = session === undefined ? null : sessionLink(session)
   if (link === null) return
-  const ran = await $.process.run(['open', link], { timeoutMs: 5000 }).catch(() => undefined)
+  const ran = await $.process.run(openArgv(await host($), link), { timeoutMs: 5000 }).catch(() => undefined)
   if (ran?.exitCode !== 0) $.ui.toast('The desktop did not open that session.')
 }
 
@@ -1062,12 +1100,14 @@ async function sendTour($: $, prompt: string, readsNext: boolean): Promise<void>
   await $.prompt.submit({ text: prompt, asUser: true })
 }
 
-/** A file every macOS has and no other system does: Claude Code's mod API names no platform, so this is how the tour tells. */
-const MACOS_MARKER = '/System/Library/CoreServices/SystemVersion.plist'
+/** A file every macOS has and no other system does: Claude Code's mod API names no platform, so this is how the tour tells macOS from Linux. */
+const MACOS_MARKER = '/System/Library/CoreServices/SystemVersion.plist' // host-boundary: tells macOS from Linux
 
 /** Reads what the tour's setup lines say: the system, gh with its version and login, and this folder's human-queue.md. */
 async function readTourSetup($: $): Promise<void> {
-  const platform = (await $.fs.exists(MACOS_MARKER).catch(() => false)) ? 'macos' : 'other'
+  const system = await host($)
+  const platform: TourSetup['platform'] =
+    system.os === 'windows' ? (system.shell === null ? 'windows-no-bash' : 'windows') : (await $.fs.exists(MACOS_MARKER).catch(() => false)) ? 'macos' : 'other'
   const queueFile = await $.fs.exists(await filePath($)).catch(() => false)
   // `gh --version` asks GitHub nothing, so it skips the limits' pacing.
   const ghVersion = await installedGhVersion((argv, init) => $.process.run(argv, init)).catch(() => null)
@@ -1580,9 +1620,13 @@ function pictureSize($: $, url: string, root: string): { file: string; width: nu
     return 'failed'
   }
   pictureSizes.set(url, 'pending')
-  void $.process
-    .run(['/bin/sh', '-c', FETCH_SCRIPT, 'sh', nameOf(url), ...fetchArgs(fetch, SIZE)], { timeoutMs: 45_000 })
-    .then(ran => (ran.exitCode === 0 ? sizeOf(ran.stdout) : null))
+  void host($)
+    .then(async h => {
+      const run = pictureRun(h, nameOf(url), fetch, SIZE)
+      if (typeof run === 'string') return null
+      const ran = await $.process.run(run.argv, { timeoutMs: 45_000 })
+      return ran.exitCode === 0 ? sizeFrom(run, ran.stdout) : null
+    })
     .catch(() => null)
     .then(size => {
       pictureSizes.set(url, size ?? 'failed')
@@ -1592,7 +1636,7 @@ function pictureSize($: $, url: string, root: string): { file: string; width: nu
 }
 
 /** One strip of a picture as the card holds it, starting its fetch the first time it is asked for. */
-function pictureOf($: $, url: string, root: string, page: Strip): Loaded | 'failed' | 'pending' {
+function pictureOf($: $, url: string, root: string, page: Strip): Loaded | 'failed' | 'pending' | 'too large' {
   const key = `${url}@${page.top}-${page.rows}-${page.most}`
   const held = pictures.get(key)
   if (held !== undefined) return held
@@ -1602,9 +1646,14 @@ function pictureOf($: $, url: string, root: string, page: Strip): Loaded | 'fail
     return 'failed'
   }
   pictures.set(key, 'pending')
-  void $.process
-    .run(['/bin/sh', '-c', FETCH_SCRIPT, 'sh', nameOf(url), ...fetchArgs(fetch, page)], { timeoutMs: 45_000 })
-    .then(ran => (ran.exitCode === 0 ? loadedOf(ran.stdout) : null))
+  void host($)
+    .then(async h => {
+      const run = pictureRun(h, nameOf(url), fetch, page)
+      if (typeof run === 'string') return run
+      const ran = await $.process.run(run.argv, { timeoutMs: 45_000 })
+      // Without sips a picture is never shrunk, so one past its budget opens instead of drawing (issue 152).
+      return ran.exitCode === 0 ? loadedFrom(run, ran.stdout) : run.plain && ran.exitCode === 5 ? 'too large' as const : null
+    })
     .catch(() => null)
     .then(loaded => {
       pictures.set(key, loaded ?? 'failed')
@@ -1623,9 +1672,13 @@ function videoState($: $, url: string, root: string): Video | 'failed' | 'pendin
     return 'failed'
   }
   videos.set(url, 'pending')
-  void $.process
-    .run(['/bin/sh', '-c', VIDEO_SCRIPT, 'sh', nameOf(url), fetch.kind, fetch.kind === 'file' ? fetch.path : fetch.url], { timeoutMs: 150_000 })
-    .then(ran => (ran.exitCode === 0 ? videoOf(ran.stdout) : ran.exitCode === NOT_A_FILM ? 'image' as const : null))
+  void host($)
+    .then(async h => {
+      const argv = videoArgv(h, nameOf(url), fetch)
+      if (argv === null) return null
+      const ran = await $.process.run(argv, { timeoutMs: 150_000 })
+      return ran.exitCode === 0 ? videoOf(ran.stdout) : ran.exitCode === NOT_A_FILM ? 'image' as const : null
+    })
     .catch(() => null)
     .then(video => {
       videos.set(url, video ?? 'failed')
@@ -1651,7 +1704,7 @@ let compose: ((items: readonly ComposeItem[]) => Promise<Plan[]>) | undefined
 function composerOf($: $): (items: readonly ComposeItem[]) => Promise<Plan[]> {
   compose ??= composer(
     async () => {
-      const home = (await $.env.get('HOME')) ?? ''
+      const home = (await host($)).home ?? ''
       const adapter = (await $.env.get('JEV_ADAPTER')) || ''
       const key = await $.env.get('TYPESAFE_API_KEY')
       return access({ key, adapterFound: key?.trim() ? await $.fs.exists(adapter) : false, root: $.plugin.root, home, adapter })
@@ -2469,7 +2522,8 @@ async function takeBackUnsent($: $, key: string): Promise<void> {
 
 /** The person's local date: the host's clock and zone where a shell answers, else UTC. */
 async function today($: $): Promise<string> {
-  const ran = await $.process.run(['date', '+%F'], { timeoutMs: 2000 }).catch(() => undefined)
+  const argv = dateArgv(await host($))
+  const ran = argv === null ? undefined : await $.process.run(argv, { timeoutMs: 2000 }).catch(() => undefined)
   const date = ran?.exitCode === 0 ? ran.stdout.trim() : ''
   return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : localDate(await $.clock.now())
 }
@@ -2671,8 +2725,8 @@ const WAIT_ON_ROW =
 async function sessionMode($: $): Promise<string | null> {
   const id = await $.session.id()
   const scanned = (await read($, caches)).caches.find(c => c.kind === 'session' && c.file.endsWith(`/${id}.jsonl`))?.file
-  const home = (await $.env.get('HOME')) ?? ''
-  const path = scanned ?? (home === '' ? null : `${home}/.claude/projects/${projectFolder(await $.session.root())}/${id}.jsonl`)
+  const { home } = await host($)
+  const path = scanned ?? (home === null ? null : `${home}/.claude/projects/${projectFolder(await $.session.root())}/${id}.jsonl`)
   if (path === null) return null
   const text = await $.fs.read(path).catch(() => null)
   return typeof text === 'string' ? modeOf(text) : null
@@ -2723,9 +2777,8 @@ const CARD_POLL_MS = 3000
 async function watchCards($: $): Promise<void> {
   const held = await read($, decisionCards)
   if (held.tasks.length === 0) return
-  const home = (await $.env.get('HOME')) ?? ''
-  if (home === '') return
-  const root = `${home}/Library/Application Support/Claude/claude-code-sessions`
+  const root = (await host($)).desktopSessions
+  if (root === null) return
   const dirs = async (path: string) => (await $.fs.list(path).catch(() => [])).filter(f => f.kind === 'dir').map(f => `${path}/${f.name}`)
   for (const account of await dirs(root)) {
     for (const org of await dirs(account)) {
@@ -3261,7 +3314,7 @@ export const register: Register = (on, _options) => {
       const input = e as unknown as Record<string, unknown>
       const named = input.file_path
       if (typeof named !== 'string' || named === '') return next(e)
-      const path = named.startsWith('/') ? named : `${(await $.session.cwd()).replace(/\/$/, '')}/${named}`
+      const path = resolveIn(await $.session.cwd(), named)
       const replaced = tool === 'Write' ? await $.fs.read(path).then(String, () => null) : null
       const result = await next(e)
       if (result.deny !== undefined || result.isError === true) return result
@@ -5274,6 +5327,7 @@ export const register: Register = (on, _options) => {
         const plan = stripsOf(size.width, size.height, across, share)
         const loaded = plan.map(one => ({ one, state: pictureOf($, url, root, one.strip) }))
         if (loaded.some(one => one.state === 'failed')) return 'failed'
+        if (loaded.some(one => one.state === 'too large')) return 'too large'
         if (loaded.some(one => one.state === 'pending')) return 'pending'
         const strips = loaded.map(({ one, state }) => ({ source: pictureSvg((state as Loaded).base64, one.width, one.height), width: one.width, height: one.height }))
         if (strips.some(one => one.source === null)) return 'too large'
@@ -5321,7 +5375,7 @@ export const register: Register = (on, _options) => {
                       {/* Only a picture the pane cannot draw opens in another app; one it draws opens full size here (the owner, 2026-10-23). */}
                       {typeof state === 'object' && (d === null || d === undefined) ? (
                         <Box key="picture-open-row" flexDirection="row">
-                          <Button key="picture-open" label="Open" onPress={() => void $.process.run(['open', state.file], { timeoutMs: 5000 }).catch(() => undefined)} />
+                          <Button key="picture-open" label="Open" onPress={() => openOnHost($, state.file)} />
                         </Box>
                       ) : null}
                     </Box>
@@ -5339,9 +5393,9 @@ export const register: Register = (on, _options) => {
               return (
                 <Box key={`film-${i}`} flexDirection="row" columnGap={1} alignItems="center">
                   {typeof state === 'object' ? (
-                    <Button key="play" label={playLabel(state.seconds)} onPress={() => void $.process.run(['open', state.file], { timeoutMs: 5000 }).catch(() => undefined)} />
+                    <Button key="play" label={playLabel(state.seconds)} onPress={() => openOnHost($, state.file)} />
                   ) : state === 'failed' && /^https:/.test(one.url) ? (
-                    <Button key="play" label="▶ Open in browser" onPress={() => void $.process.run(['open', one.url], { timeoutMs: 5000 }).catch(() => undefined)} />
+                    <Button key="play" label="▶ Open in browser" onPress={() => openOnHost($, one.url)} />
                   ) : null}
                   <Text key="film-name" dimColor wrap="wrap">
                     {state === 'pending' ? 'Fetching the film…' : state === 'failed' ? `The film could not load${one.alt === '' ? '' : `: ${one.alt}`}` : one.alt}

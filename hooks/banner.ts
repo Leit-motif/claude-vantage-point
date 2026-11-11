@@ -4,6 +4,7 @@
 import { adrKey, bind, governing, LOG_ARGS, parseAdr, parseLog, relativeTo } from '../panes/banner/decisions.ts'
 import type { Adr, Bindings } from '../panes/banner/decisions.ts'
 import type { Governing } from '../panes/banner/picture.ts'
+import { dirName, isAbsolute } from '../panes/host.ts'
 
 export type BannerIO = {
   /** `git -C dir ...args`'s output, or null when it failed. */
@@ -30,7 +31,7 @@ function rootOf(io: BannerIO, dir: string): Promise<string | null> {
   if (held !== undefined) return held
   const found = io.git(dir, ['rev-parse', '--show-toplevel']).then(out => {
     const root = out?.trim() ?? ''
-    return root.startsWith('/') ? root : null
+    return isAbsolute(root) ? root : null
   }, () => null)
   roots.set(dir, found)
   return found
@@ -67,7 +68,7 @@ async function repoAt(io: BannerIO, root: string): Promise<Repo> {
 
 /** The ADR the file at absolute `path` answers to, or null outside a repository or where nothing binds it. */
 export async function governingOf(io: BannerIO, path: string): Promise<Governing | null> {
-  const root = await rootOf(io, path.slice(0, path.lastIndexOf('/')) || '/')
+  const root = await rootOf(io, dirName(path))
   if (root === null) return null
   const relative = relativeTo(root, path)
   if (relative === null) return null

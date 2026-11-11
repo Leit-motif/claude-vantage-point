@@ -11,6 +11,7 @@ import { BAND, INACTIVE, QUIET, RECOMMENDED, SIGNAL_BLUE, SIGNAL_RED, TEXT } fro
 import { BAND_PT } from '../../hooks/steps.ts'
 import { recent, type Edited } from './edits.ts'
 import { ADR_LABEL_GAP, DESCENT, EDGE, FILE_LABEL_DY, place, samePlaces, type NodeKind, type Placed, type Spec } from './layout.ts'
+import { baseName } from '../host.ts'
 
 /**
  * The ADR a file answers to, as the band holds it: its number and words as its file name writes
@@ -99,7 +100,6 @@ export function stripHeight(atLeast: number, { maxRows, rows }: Band): number {
   return best
 }
 
-const baseName = (path: string) => path.split('/').pop() ?? path
 const adrId = (n: number) => `adr:${n}`
 
 /** A file's dot radius for the lines it gained and lost: the square root of their sum, from 2.5 at one line to 6 at 400 and past. */
