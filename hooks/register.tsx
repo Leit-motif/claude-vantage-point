@@ -4403,11 +4403,12 @@ export const register: Register = (on, _options) => {
     const usage = (await $.session.usage().catch(() => null))?.context
     const label = contextLabel(usage)
     const { Box, Button, Text } = $.ui.resolve(e)
-    const context = label === null ? null : <Text color={(usage?.percent ?? 0) >= CONTEXT_HIGH ? SIGNAL_YELLOW : QUIET}>{label}</Text>
+    const fold = (await read($, bandMinimized)) ? await foldedCounts($) : null
+    // Folded, the footer has room for the minutes alone: the context ran on in their Text and cut them to `59…`.
+    const context = label === null || fold !== null ? null : <Text color={(usage?.percent ?? 0) >= CONTEXT_HIGH ? SIGNAL_YELLOW : QUIET}>{label}</Text>
     // The folded band (issue 162): ↗ first, which brings the band back, then 📖, then 👤 and this project's asks,
     // which opens the human queue, then 🤖 and this project's ready tickets, which opens the Decision pane (the
     // owner, 2026-11-10). The emoji keep their colours in a pill, as 📖 does, and say what each number counts.
-    const fold = (await read($, bandMinimized)) ? await foldedCounts($) : null
     return (
       <Box flexDirection="row" alignItems="center" columnGap={1}>
         {engine}
@@ -4417,12 +4418,13 @@ export const register: Register = (on, _options) => {
           <Button key="fold-you" label={`👤 ${fold.waiting}`} onPress={() => openPane($)} />,
           <Button key="fold-agent" label={`🤖 ${fold.ready ?? '—'}`} onPress={() => $.ui.open({ id: DECISION_PANE, title: 'Decision', focus: true }).then(() => undefined)} />,
         ]}
-        {/* The warm-cache count opens the Caches pane, the Cache label beside it saying what it counts (ADR 0007). */}
+        {/* The warm-cache count opens the Caches pane, the Cache label beside it saying what it counts (ADR 0007).
+            With the band folded into the footer the word and the context go and the coloured minutes stay, or the footer cuts them. */}
         <Box key="cache-pair" flexDirection="row" alignItems="center" columnGap={1}>
           <Button key="caches-open" label={String(cachesAt(held, now).filter(isWarm).length)} onPress={() => openCaches($)} />
           {mine !== undefined && (
             <Text>
-              {'Cache '}
+              {fold === null ? 'Cache ' : null}
               <Text color={CACHE_TONE[mine.state]}>{leftLabel(mine.left)}</Text>
               {context}
             </Text>

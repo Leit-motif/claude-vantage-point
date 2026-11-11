@@ -1,6 +1,6 @@
 {
   "name": "vantage-point",
-  "version": "0.254.0",
+  "version": "0.256.0",
   "description": "Vantage Point: a HUD above the Claude Code prompt, and the human queue, where agents queue asks and you rule yes/no with comments, from the desktop or your phone.",
   "author": {
     "name": "Leit-motif"
