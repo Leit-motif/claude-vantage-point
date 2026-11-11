@@ -7,8 +7,11 @@
   "plugins": [
     {
       "name": "vantage-point",
-      "source": "./",
-      "version": "0.256.0",
+      "source": {
+        "source": "github",
+        "repo": "Leit-motif/claude-vantage-point",
+        "ref": "plugin"
+      },
       "description": "A HUD above the Claude Code prompt and a pane where you rule on what your agents ask."
     }
   ]
