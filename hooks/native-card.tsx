@@ -134,6 +134,30 @@ export function bodyProps(card: NativeCard): BodyProps {
   }
 }
 
+/**
+ * The rows of 19pt the body draws under its dots: the ask's title, its source and lead-in, and the item's
+ * frame with its question and text, which a Client steps a whole 20pt row apart (docs/palette.md). A picture
+ * under the body takes what the pane leaves after these; counting only the question let it take the item's
+ * own rows, so the frame clipped its question away (issue 164). Lines are measured at about 7pt a
+ * character in the pane's width, as the question's always were (#100); the frame's border and padding take four cells.
+ */
+export function nativeBodyRows(card: NativeCard): number {
+  const body = bodyProps(card)
+  const lines = (text: string, inset: number) => (text === '' ? 0 : Math.ceil((text.length * 7) / Math.max(140, (card.columns - 2 - inset) * 7.8)))
+  // The gap under the dots, the title's lines and the source's, then the lead-in's lines and the margin over them.
+  const ask = body.title === '' ? 0 : 20 * (lines(body.title, 0) + 2) + (body.setup === '' ? 0 : 20 * (lines(body.setup, 0) + 1))
+  const blocks = body.blocks.reduce(
+    (sum, block, i) => sum + (i > 0 ? 20 : 0) + 20 * (block.kind === 'code' ? block.lines.length : lines(block.runs.map(run => run.text).join(''), 4 + block.depth * 2)),
+    0,
+  )
+  const heading = body.heading === null ? 0 : 20 * lines(body.heading, 4) + (blocks > 0 ? 20 : 0)
+  // The gap over the frame, and the frame's own padding above and below, about 12pt each.
+  const frame = heading + blocks === 0 ? 0 : 20 + 24 + heading + blocks
+  // And the hooks' 10pt step between the body and the picture under it (the 12 rows reserved besides hold the
+  // back arrow, the dots and the three rows of controls, measured off issue 164's card).
+  return Math.ceil((ask + frame + 10) / 19)
+}
+
 export function nativeCard(
   el: NativeElements,
   card: NativeCard,
@@ -150,10 +174,14 @@ export function nativeCard(
   const item = card.items[card.index - 1]
   // Plain, as No and Yes are: the dot says which was picked, and white stays Submit's alone (the design review, 2026-10-31).
   const choice = (key: 'a' | 'same' | 'b', label: string) => <Button key={key} label={label} onPress={on[key]} />
+  // A card with a picture runs to its own height too: its body is never squeezed to make room, so the
+  // question stays whole (ADR 0028), and the picture is sized to what the body leaves, the pane scrolling
+  // only for a picture that would not be legible smaller (ADR 0049, issue 164).
+  const runs = composed !== null || pictures !== null
 
   return (
     // A composed card runs to its own height, the pane scrolling where its two pictures need it to (#105).
-    <Box key="native" flexDirection="column" {...(composed === null ? { height: card.rows } : {})} gap={1}>
+    <Box key="native" flexDirection="column" {...(runs ? {} : { height: card.rows })} gap={1}>
       {/* Back to the overview of every repo's asks: the arrow alone, and no hotkey, since the
           pane seldom holds the keyboard (the owner, 2026-10-17, issue #65). */}
       {on.plate === undefined ? null : (
@@ -163,7 +191,7 @@ export function nativeCard(
       )}
       {/* The body takes what the rest leaves and clips there: a Client cannot shrink, and one
           sized to the whole pane pushed the comment and the footer below the fold (issue #65). */}
-      {composed === null ? (
+      {!runs ? (
         <Box key="body-slot" flexGrow={1} flexShrink={1} minHeight={0} overflow="hidden">
           {body}
         </Box>

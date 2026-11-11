@@ -106,7 +106,7 @@ import { endReader, isHeld, pacingOf, speedReader, startReader, switchLevel, tog
 import { GIST_SECTION, splitGist } from '../panes/reader/gist'
 import type { ReaderIO } from './reader'
 import { plainQuote } from './reply'
-import { bodyProps, nativeCard, setupText } from './native-card'
+import { bodyProps, nativeBodyRows, nativeCard, setupText } from './native-card'
 import { lineRows, nativePlate, pickNext } from './native-plate'
 import { palette as drawPalette, PAGES, PALETTE_START, SCOPE } from './palette'
 import { takesNewProps } from './engine'
@@ -5315,8 +5315,12 @@ export const register: Register = (on, _options) => {
       // A lone picture takes the rows the card leaves it: 12 for the back arrow, dots, gaps and the three rows of
       // controls, and the question's own wrapped rows (measured on the desktop, #124), so a tall mock draws as
       // large as fits and a long question never pushes the controls past the pane; several share about half of it.
-      const reserved = 12 + lineRows(item?.heading ?? '')
-      const tall = shown.length === 1 ? Math.max(Math.round(paneRows * 19 * 0.45), (paneRows - reserved) * 19) : Math.round((paneRows * 19 * 0.45) / Math.max(1, pictureRowsOf))
+      // No flat floor under it: one made the page overrun by a sliver (ADR 0033); `legible` is the floor, and a
+      // picture it would shrink past keeps the card's width, the page scrolling by its height (ADR 0049).
+      // A native card's body draws the ask's title, source and lead-in and the item's whole frame over the picture, so
+      // it counts all of them; a composed card draws only its question there (issue 164).
+      const reserved = 12 + (item === undefined || composeItem(item) === null ? nativeBodyRows(card) : lineRows(item.heading))
+      const tall = shown.length === 1 ? Math.max(1, paneRows - reserved) * 19 : Math.round((paneRows * 19 * 0.45) / Math.max(1, pictureRowsOf))
       const cell = across === 1 ? room : Math.floor((room - 10) / 2)
       // A tall mock fitted to the card's height would draw its text too small to read, so it keeps the card's width (#124).
       // It draws as strips stacked with no gap, each its own copy, sharing the tree's picture budget, so its type stays
@@ -5415,7 +5419,8 @@ export const register: Register = (on, _options) => {
       const composed = await composedOf($, e, item, 'desktop', media === null ? null : { count: all.length, node: media }, fullSize)
       const body =
         Client === undefined ? null : composed === null ? (
-          <Client key="body" width="100%" height="100%" module="../panes/human-queue/native-body.tsx" props={bodyProps(card)} />
+          // Over a picture the body takes its own height, so the picture cannot squeeze its question away (issue 164).
+          <Client key="body" width="100%" {...(media === null ? { height: '100%' } : {})} module="../panes/human-queue/native-body.tsx" props={bodyProps(card)} />
         ) : (
           // The body keeps the dots alone; the composed card draws the item, with no title, ref or lead-in over it (#97, #105).
           <Client key="body" width="100%" module="../panes/human-queue/native-body.tsx" props={{ ...bodyProps(card), title: '', source: '', setup: '', heading: null, blocks: [] }} />
