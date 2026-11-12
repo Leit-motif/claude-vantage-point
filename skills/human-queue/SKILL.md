@@ -54,7 +54,7 @@ Other annotation kinds, such as a classification (one label from a fixed set), a
 
 ## Write each item to stand alone
 
-The person works across many sessions at once and comes back to an ask days later, remembering none of it. The card shows one item at a time and draws exactly two things: **the question, and at most two pictures** (the owner, 2026-10-26). No so-what line, no why line, no answers box, no lead-in, no caption. The item's prose is the record and sits behind Full text, one press away. So the question and the pictures must carry the ruling on their own:
+The person works across many sessions at once and comes back to an ask days later, remembering none of it. The card shows one item at a time and draws exactly two things: **the question, and at most two pictures** (the owner, 2026-10-26). No so-what line, no why line, no answers box, no caption. The request's lead-in is drawn once, over the first item (see "Keep the lead-in to what no item says"). The item's prose is the record and sits behind Full text, one press away. So the question and the pictures must carry the ruling on their own:
 
 1. **The question**, as the `###` heading: the yes-or-no in plain words, under about 90 characters, **written as what you recommend, so Yes takes it** ("Keep the full-size labels?", not "Keep or revert?"). It says what a yes gets, not what you built. The card draws it whole and bold. A pair's question names what A and B are judged on, and leans toward neither.
 2. **One or two pictures**: the facts the ruling turns on, drawn from the catalog (step 4), or an image embedded in the item with `![what it shows](url)` for anything visual (a layout, a pane, a mock, a shot). Each embedded image takes one of the two. One picture that settles the ruling beats two. Use the issue's uploaded image (`https://github.com/user-attachments/assets/...`), a file in a repository (`https://github.com/<owner>/<repo>/blob/<ref>/<path>`), or, in `human-queue.md`, a path to a PNG. For an HTML mock, shoot it to a PNG first, at 2x and about 600pt wide (1200px), so the card draws it sharp at its own width; the pane keeps up to 1280px across. Shoot only what the ruling turns on: a picture taller than wide draws across the card and makes it scroll, so crop each option to the part that differs rather than stacking whole panes. Two options to compare go in one picture, stacked in one column. Mark the difference in the picture itself (circle it, label it); the person should not have to hunt for it, and nothing under the picture says it again.
@@ -121,9 +121,27 @@ Say what things are, never only their names. A tracker number (`macos#75`, `#21`
 
    The review tool refuses an ask whose facts fail their schema, naming the fact kind and the field (`facts.comparison.rows[0].better is "lower" or "higher"`), and so does the pane: it holds the ask back until it is fixed, as it does for an item that does not stand alone. Invalid JSON, a kind not in the table and a second block in one item fail too. An item carries one block, and it does not go in the lead-in. Editing the block after the person has ruled reopens the item exactly as editing its prose does.
 
-Shared context (what the round is) goes in the request's lead-in, kept under about 480 characters. The card does not draw it over an item with facts: it is the record, read through Full text, so no item leans on it.
-
 Never point away from the item: "as shot below", "the comment above", "see this comment" lead nowhere in the card. The review tool refuses such an ask, one about how something looks with no picture, one whose prose names things in shorthand, and one whose facts fail their schema, and says what to fix. The pane holds back any open ask that fails the same check, so it never reaches the person until it is fixed.
+
+## Keep the lead-in to what no item says
+
+The request's lead-in is the paragraph under its title, before the first `###`. Keep it under about 480 characters. The card draws it, whole, over the first item, so the person reads it and then that item's question and text together. Each item already carries its own setup, because it must stand alone. So **the lead-in carries only what no item says**: what rides on the round, what happens after the rulings, and whether anything is posted, sent or shipped. It never restates what each item says: what is being compared, how the drafts were made, what to pick. Write the items first, then write the lead-in from what is left.
+
+The review tool refuses a lead-in sentence whose content words every item already says (three or more words, 60% of them in each item), quotes each one, and asks you to cut it. A sentence that only some items say passes.
+
+A blind check of five Reddit drafts, as filed. Each item says the drafts share a writer and notes, that they differ only in which real comments the writer learned from, and asks which you would rather post:
+
+```markdown
+Blind check of one change to the Reddit writer. Each pair is the same writer and notes; one draft learned from recent Reddit comments, the other only from comments older than ChatGPT. Pick the one you would rather post. If the older examples win more pairs, they become the default for Reddit comments. Nothing here is posted.
+```
+
+The second and third sentences say again what every item says, so the card shows 13 lines of prose before the first draft. The same lead-in, trimmed to what no item says (what differs, what rides on it, and that nothing is posted):
+
+```markdown
+A blind check of one change to the Reddit writer: in each pair, one draft's examples are all older than ChatGPT. If those drafts win more pairs, older examples become the default for Reddit comments. Nothing here is posted.
+```
+
+The lead-in never stands in for an item's setup: an item still says everything its ruling needs, as if the lead-in were not there.
 
 ## The artifact fallback
 
@@ -162,7 +180,7 @@ It reads the repository's `.claude/vantage-point.json`, its `docs/agents/triage-
    ```markdown
    ## Asks
 
-   What you need decided, the bar each item must clear, and what the person needs to know to come back to it cold. One short paragraph.
+   What rides on these rulings, what happens after them, and whether anything is posted: only what no item says (see "Keep the lead-in to what no item says"). One short paragraph.
 
    ### alpha
 

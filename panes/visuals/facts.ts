@@ -382,7 +382,7 @@ const SAYS_MORE = new Set(['answers', 'pair', 'terms', 'sources'])
 const COMMON = new Set(['about', 'after', 'also', 'before', 'from', 'have', 'into', 'just', 'more', 'most', 'only', 'over', 'same', 'some', 'than', 'that', 'their', 'them', 'then', 'there', 'these', 'they', 'this', 'what', 'when', 'where', 'which', 'while', 'will', 'with', 'would', 'your'])
 
 /** The content words of a text, each keyed by a stem so "reviewed" meets "reviewing" and "added" meets "adds". */
-function stems(text: string): Map<string, string> {
+export function stems(text: string): Map<string, string> {
   const out = new Map<string, string>()
   for (const word of text.toLowerCase().match(/[a-z]+/g) ?? [])
     if (word.length >= 4 && !COMMON.has(word)) {

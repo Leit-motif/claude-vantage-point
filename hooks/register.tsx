@@ -55,6 +55,8 @@ import {
   contextGaps,
   uncomposedItems,
   uncomposedText,
+  restatedLeadIn,
+  restatedText,
   gapsText,
   FILE,
   QueueError,
@@ -3560,6 +3562,9 @@ export const register: Register = (on, _options) => {
     // An item with no facts or no context would draw as its question alone, so it goes back to the agent (the owner, 2026-10-23, #102).
     const bare = uncomposedItems(request)
     if (bare.length > 0) return { deny: uncomposedText(bare) }
+    // Each item carries its own setup, so a lead-in that says it again reads twice over the first item (issue 164's design review).
+    const restated = restatedLeadIn(request)
+    if (restated.length > 0) return { deny: restatedText(restated) }
     const qid = qidOf(request)
     void planOpen($, [request]).catch(() => undefined)
     await update($, notify, ids => (ids.includes(qid) ? ids : [...ids, qid]))

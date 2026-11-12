@@ -13,7 +13,7 @@
 
 import type { HumanQueueIssue, HumanQueueIssueMeta } from '../../types'
 import type { Conventions } from './conventions.ts'
-import { overBudget, parseFacts, unsaid, type Facts, type SchemaError } from '../visuals/facts.ts'
+import { overBudget, parseFacts, stems, unsaid, type Facts, type SchemaError } from '../visuals/facts.ts'
 import { picturesOf, withoutPictures } from './pictures.ts'
 
 /**
@@ -1066,6 +1066,45 @@ export function uncomposedText(items: Uncomposed[]): string {
   return [
     `Not opened: an item reaches the person as its question and at most ${CARD_PICTURES} pictures, nothing else (the owner, 2026-10-26; the vantage-point:ask skill, step 4). Write the question as your recommendation, so Yes takes it. Give each item a vantage-facts block with an answers fact, which the card does not draw, and the one or two facts or embedded images the ruling turns on, as pictures: numbers, flows, steps, counts, splits and comparisons. A pair item, a blind choice between A and B, carries a pair fact in place of answers. Everything else stays in the item's full text, one press away.`,
     ...items.map(one => `- ${one.heading}: ${why(one)}. Fix it from what the work has, then call the review tool again.`),
+  ].join('\n')
+}
+
+/** A lead-in sentence that every item already says this much of, in content words, restates them. */
+export const RESTATED_SHARE = 0.6
+// Words that join a sentence rather than say what it is about; the facts check keeps its own list.
+const JOINERS = new Set(['each', 'other', 'both', 'here', 'like', 'every'])
+
+/**
+ * The lead-in's sentences that restate what every item says (the design review
+ * of issue 164: a blind check of Reddit drafts drew "same writer and notes" and "rather post"
+ * in its lead-in and again in the item under it). Each item stands alone, so it
+ * already carries its setup, and the card draws the lead-in over the first item:
+ * a lead-in carries only what no item says, such as the stake, what follows the
+ * rulings, and whether anything is posted. A sentence with fewer than three
+ * content words passes. Only the review tool refuses on it: an ask filed before
+ * the rule still reaches the pane.
+ */
+export function restatedLeadIn(request: Pick<Request, 'body' | 'items'>): string[] {
+  if (request.items.length === 0) return []
+  const items = request.items.map(item => stems(`${item.heading} ${prose(item.body)}`))
+  return prose(request.body)
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[.?!])\s+/)
+    .filter(sentence => {
+      const words = [...stems(sentence)].filter(([, word]) => !JOINERS.has(word))
+      if (words.length < 3) return false
+      const said = words.filter(([stem]) => items.every(item => item.has(stem))).length
+      return said / words.length >= RESTATED_SHARE
+    })
+    .map(sentence => sentence.trim())
+}
+
+/** The review tool's refusal for a lead-in that restates its items. */
+export function restatedText(sentences: string[]): string {
+  return [
+    'Not opened: the lead-in repeats what every item already says, and the card draws it over the first item, so the person reads it twice (the vantage-point:ask skill, "Keep the lead-in to what no item says"). Cut these sentences, and keep only what no item says: the stake, what happens after the rulings, whether anything is posted.',
+    ...sentences.map(sentence => `- "${sentence}"`),
+    'Edit the lead-in, then call the review tool again.',
   ].join('\n')
 }
 

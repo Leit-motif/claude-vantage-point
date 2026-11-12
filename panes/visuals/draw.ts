@@ -18,13 +18,24 @@ export type Picture = { source: string; width: number; height: number; alt: stri
 export const MIN_W = 300
 
 /**
- * A card's inner width in CSS pixels, which every picture on it fills: a pane
- * column is about 9.75pt (docs/palette.md), less the pane's insets and the card's
- * border and padding. The album and the queue card both size from here. The
- * engine's `bodyColumns` has been seen to disagree with the card's real width
- * (the album, narrow after the show tool reopened its pane), so a fix lands here.
+ * A cell across, in CSS pixels: `1ch` of the pane's font, system-ui at 14px, which
+ * Chrome draws 8.8125 wide on the owner's Mac. The desktop measures its cell with a
+ * `width:1ch` span and counts a pane's `bodyColumns` as the body's width over it,
+ * rounded down (its remote-surface bundle, desktop 2.1.321), and a Box's width cell
+ * is the same measure (docs/palette.md).
  */
-export const cardWidth = (bodyColumns: number) => Math.round(bodyColumns * 9.75 - 60)
+export const CELL_PX = 8.8125
+
+/**
+ * The width every card picture is drawn at, in CSS pixels: the widest a body of
+ * `bodyColumns` can be. The desktop rounds the body down to whole cells and takes no
+ * pixel width outside an Svg, so the body's real width is anywhere in the cell past
+ * `bodyColumns`; it scales a picture wider than its Box down to fit (docs/palette.md),
+ * so a picture drawn at the top of that range meets its frame's edges at any pane
+ * width, for a shrink of at most one cell (1.5% at 64 columns). Sized at the low end,
+ * a picture ended up to a cell inside the item frame above it (issue 165).
+ */
+export const cardWidth = (bodyColumns: number) => Math.ceil((bodyColumns + 1) * CELL_PX)
 
 const FONT = 'font-family="-apple-system, system-ui, sans-serif"'
 /** A line that carries meaning on the pane's ground: the darkest grey that passes 3:1. */

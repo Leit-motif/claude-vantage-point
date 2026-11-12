@@ -21,7 +21,7 @@ import type {
 } from 'claude-code'
 import { TECHNIQUES, type TileSize } from '../panes/visuals/catalog'
 import { card, type Plan, type Surface } from '../panes/visuals/compose'
-import { DRAWN_VIEWS, drawsWhole, PICTURES, threshold, type Picture } from '../panes/visuals/draw'
+import { CELL_PX, DRAWN_VIEWS, drawsWhole, PICTURES, threshold, type Picture } from '../panes/visuals/draw'
 import { QUESTIONS, type Facts, type Question } from '../panes/visuals/facts'
 import { CARD_CAP, explainPage, MAX_TEXT_TILES, MAX_TILES, page, type Cap, type Tile } from '../panes/visuals/page'
 import { CARD_LINE, FILL, SIGNAL_YELLOW } from './signal'
@@ -143,20 +143,14 @@ const ROW_PT = 19
 const textRows = (text: string, room: number) => Math.max(1, Math.ceil((text.length * 7) / Math.max(70, room)))
 const sum = (xs: readonly number[]) => xs.reduce((a, b) => a + b, 0)
 
-/** A tile's frame and head take this much of its width (a cell of padding each side and the border), and these rows. */
-const TILE_INSET_PX = 26
+/** A tile's frame takes this much of its width: a cell of padding each side and a pixel of border. */
+const TILE_INSET_PX = 2 * CELL_PX + 2
 const TILE_FRAME_ROWS = 2
-/** The gap between two half tiles, in pixels: one cell. */
+/** The gap between two half tiles, in pixels: a column gap of 1, which drew 9.5pt (docs/palette.md). */
 const HALF_GAP_PX = 10
-/**
- * A Box's width cell, in points: a frame 32 cells wide drew 282pt in the shot of
- * EXP-023 (#103). 10.2pt, read off a body column count a pop-out had skewed,
- * built frames too narrow, and the desktop scaled their pictures down to fit.
- */
-const CELL_PT = 8.8
 
 /** The width a tile's content fills at a size, from the page's width. */
-const tileRoom = (room: number, size: TileSize) => Math.floor((size === 'wide' ? room : (room - HALF_GAP_PX) / 2) - TILE_INSET_PX)
+const tileRoom = (room: number, size: TileSize) => Math.ceil((size === 'wide' ? room : (room - HALF_GAP_PX) / 2) - TILE_INSET_PX)
 
 /** About how many rows a view's content takes in `room` pixels: an Svg's own height for a picture, else counted from its facts. */
 function contentRows(id: string, k: Kit): number {
@@ -251,15 +245,10 @@ function packed(el: ComposedElements, input: PackInput) {
   const costShown = tiles.some(one => one.view === 'tiles') && (facts.figures ?? []).some(one => one.unit === '$')
   const kit: Kit = { ...base, scoped: tiles.some(one => one.view === 'what-if'), lead: tiles.find(one => one.group === 'primary')?.view, costShown }
 
-  /** `last` lets the row's last tile run to the page's edge, so rows share one right edge (the design review, 2026-10-24). */
-  const tile = (one: Tile | { view: string; size: TileSize }, last = false) => {
-    const k = at(one.size, kit)
+  const tile = (one: Tile | { view: string; size: TileSize }, k: Kit, width: number | `${number}%`, last: boolean) => {
     const drawn = DRAW[one.view]?.(k)
     if (drawn === null || drawn === undefined) return null
     const head = TECHNIQUES.find(t => t.id === one.view)?.head
-    // A picture's frame is as wide as the picture, never a stretch of empty frame beside it (the owner, 2026-10-24).
-    const picture = PICTURES[one.view] === undefined ? undefined : pictureOf(one.view, k)
-    const width = picture === undefined ? (one.size === 'half' ? '50%' : '100%') : Math.ceil((picture.width + TILE_INSET_PX) / CELL_PT)
     return (
       <Box
         key={`tile-${one.view}`}
@@ -283,8 +272,28 @@ function packed(el: ComposedElements, input: PackInput) {
       </Box>
     )
   }
+  /**
+   * A row's tiles. A picture's frame is as wide as the picture, never a stretch of empty frame beside it (the owner,
+   * 2026-10-24), and the row's last tile runs to the page's edge, so rows share one right edge (the design review,
+   * 2026-10-24). Each picture is then drawn to the widest its frame can be, the last one to what the row leaves:
+   * the desktop scales a picture wider than its box down to fit, so its edges land on the frame's (issue 165).
+   */
+  const row = (tiles: readonly (Tile | { view: string; size: TileSize })[]) => {
+    let used = 0
+    return tiles.map((one, j) => {
+      const last = j === tiles.length - 1
+      const k = at(one.size, kit)
+      const picture = PICTURES[one.view] === undefined ? undefined : pictureOf(one.view, k)
+      if (picture === undefined) return tile(one, k, one.size === 'half' ? '50%' : '100%', last)
+      const cells = Math.ceil((picture.width + TILE_INSET_PX) / CELL_PX)
+      const frame = last ? input.room - used : cells * CELL_PX
+      // The gap is at least a cell, so what the row leaves its last tile is never less than it draws.
+      used += cells * CELL_PX + CELL_PX
+      return tile(one, { ...k, room: Math.max(k.room, Math.ceil(frame - TILE_INSET_PX)) }, cells, last)
+    })
+  }
   const height = (row: readonly Tile[]) => Math.max(...row.map(one => measure(one.view, one.size) ?? 0))
-  return { pg, tile, height }
+  return { pg, row, height }
 }
 
 /**
@@ -302,7 +311,7 @@ export function composedCard(
   const p = drawable(input.plan)
   const images = input.images ?? null
   const cap = { ...CARD_CAP, tiles: Math.max(0, CARD_CAP.tiles - (images?.count ?? 0)) }
-  const { pg, tile } = packed(el, { plan: p, surface: input.surface, facts: input.facts, question: input.question, room: input.room, budget: Infinity, scope: input.scope, pick: on.scope, glossary, newProps: input.newProps, given: QUESTIONS, cap })
+  const { pg, row } = packed(el, { plan: p, surface: input.surface, facts: input.facts, question: input.question, room: input.room, budget: Infinity, scope: input.scope, pick: on.scope, glossary, newProps: input.newProps, given: QUESTIONS, cap })
 
   return (
     <Box key="composed" flexDirection="column" gap={1}>
@@ -321,9 +330,9 @@ export function composedCard(
         </Box>
       ) : (
         [
-          ...pg.rows.map((row, i) => (
+          ...pg.rows.map((tiles, i) => (
             <Box key={`row-${i}`} flexDirection="row" columnGap={1} alignItems="flex-start">
-              {row.map((one, j) => tile(one, j === row.length - 1))}
+              {row(tiles)}
             </Box>
           )),
           images?.node ?? null,
