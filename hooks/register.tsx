@@ -94,7 +94,7 @@ import { isTodo, todoMoves, todoOf } from '../panes/human-queue/todo'
 import { todoBodyProps, todoCard, todoFallback, type TodoCard } from './todo-card'
 import { agentPill, youPill, freshCount, freshPill, staleCount, readSpecProgress, waitingTotal, NEW_ASK_MS } from './band'
 import type { CountObservation } from './band'
-import { withoutGist, asButtons, boxlessWrapUp, callKey, decisionFromFork, decisionOfPermission, decisionOfQuestions, modeOf, projectFolder, ROW_MODES, decisionOfWrapUp, optionSends, fitFields, forkPrompt, GATE_MODEL, GATE_SYSTEM, gateText, isYes, looksLikeDecision, parseForkJson, PERSON_TOOLS, proposedCard, startedCard, WRAP_UP_TOOL, wrapUpAsk } from './deck'
+import { asButtons, boxlessWrapUp, callKey, DECIDE_DESCRIPTION, declared, decisionOfPermission, decisionOfQuestions, modeOf, projectFolder, ROW_MODES, decisionOfWrapUp, optionSends, PERSON_TOOLS, proposedCard, startedCard, WRAP_UP_TOOL, wrapUpAsk } from './deck'
 import type { WrapUpAsk } from './deck'
 import { governingOf, type BannerIO } from './banner'
 import { banner, bannerWidth, type BandRow } from '../panes/banner/picture'
@@ -121,7 +121,7 @@ import { composedCard } from './composed'
 import { plan as planOf, type ComposeItem, type Plan } from '../panes/visuals/compose'
 import { cardWidth } from '../panes/visuals/draw'
 import { sfWidth } from '../panes/svg'
-import { chromeHeight, columnsOf, type Diagram, diagramPicture, fitDiagrams, paneHeight, pictureRoom, rowsOf, WIDE_ROOM, workScale } from '../panes/visuals/options'
+import { columnsOf, type Diagram, diagramPicture, pictureRoom, rowsOf, WIDE_ROOM, workScale } from '../panes/visuals/options'
 import { access, composer } from '../panes/visuals/jev'
 import { composeItem, isShared, needsPlan, planKey, PROSE_OPENS_KEY, readSlot } from '../panes/visuals/plans'
 import type { PlanSlot } from '../panes/visuals/plans'
@@ -201,6 +201,8 @@ const TOOL = 'mcp__vantage-point__review'
 const TASK_TOOL = 'mcp__vantage-point__task'
 /** Opens a pane or flips a session switch with no typed command, so an agent can stage a shot. */
 const SHOW_TOOL = 'mcp__vantage-point__show'
+/** The agent declares the decision it asks for, which fills the Decision pane with no model call (issue 167). */
+const DECIDE_TOOL = 'mcp__vantage-point__decide'
 /** Cells a pill takes beyond its label (`panes/band/title.ts`). */
 const PILL_CELLS = 2
 /** A band card's one button: its label, and what a press does. */
@@ -392,7 +394,42 @@ async function takeState($: $): Promise<string | null> {
   return stateTaken
 }
 
-async function clearDecision($: $): Promise<void> {
+const ROW_LOG_KEY = 'rowLog'
+
+/** What met a held decision (issue 168): each prompt's origin while one is held, and each clear with its cause. Telemetry only. */
+async function logRow($: $, event: string, detail: string): Promise<void> {
+  try {
+    const entry = { at: await $.clock.now(), session: await $.session.id().catch(() => null), event, detail: detail.slice(0, 120) }
+    const kept = await $.store.get(ROW_LOG_KEY)
+    await $.store.set(ROW_LOG_KEY, [...(Array.isArray(kept) ? kept : []), entry].slice(-60))
+  } catch {
+    // A failed write never changes the row.
+  }
+}
+
+/**
+ * Sends the person's pressed option as their prompt (issue 168). The engine holds a plugin's prompt
+ * until the running turn ends, so the decision stays, marked sent, until that prompt's turn starts;
+ * the press returns at once rather than wait out the turn, which the desktop counts as a failed press.
+ */
+async function sendChoice($: $, held: HumanQueueDecision, i: number, why: string): Promise<void> {
+  const option = held.options[i]
+  if (option === undefined || held.sent !== undefined) return
+  if (i === 0 && held.grant !== undefined) allowedOnce.add(held.grant)
+  await update($, decision, () => ({ ...held, sent: i }))
+  await logRow($, 'sent', why)
+  void $.prompt.submit({ text: held.sends?.[i] ?? option, asUser: true }).catch(async () => {
+    // Never queued: the options come back, so the person can press again.
+    await update($, decision, now => (now?.sent === i && now.ask === held.ask ? { ...held } : now))
+  })
+}
+
+/** The words a sent decision's prompt carries, or null while nothing is sent. */
+const sentText = (held: HumanQueueDecision | null): string | null =>
+  held?.sent === undefined ? null : held.sends?.[held.sent] ?? held.options[held.sent] ?? null
+
+async function clearDecision($: $, why: string): Promise<void> {
+  if ((await read($, decision)) !== null) await logRow($, 'clear', why)
   await update($, decision, () => null)
   // The next decision opens on its recommendation, even one that asks the same question.
   await update($, deckPage, () => ({ tab: 0, ask: '' }))
@@ -2743,8 +2780,18 @@ async function onPhone($: $): Promise<boolean> {
   }
 }
 
+/** Why a wrap-up question with no declaration goes back to the agent, and what to send instead (issue 167). */
+const declareFirst = (asked: WrapUpAsk) =>
+  `Not shown yet: the Decision pane is empty for "${asked.ask}". Call ${DECIDE_TOOL} with this decision` +
+  (asked.actions.length === 0 ? '' : `, its options including ${asked.actions.map(label => `"${label}"`).join(' and ')} in those words`) +
+  ', then call this tool again with the same ask and buttons.'
+
 /** The question a decision on the row asks, as the deck's fill reads it. */
 const askOf = (asked: HumanQueueDecision): WrapUpAsk => ({ ask: asked.ask, actions: asked.options, sends: asked.sends ?? asked.options })
+/** The decision the agent declared this turn through the decide tool; null when it declared none (issue 167). */
+let declaredThisTurn: HumanQueueDecision | null = null
+/** Whether this turn's wrap-up question was already sent back once for its declaration (issue 167). */
+let declareAskedThisTurn = false
 /** The session cards the running turn's `start_session` calls proposed (#67). */
 let turnCards: string[] = []
 /** Where each deck fill stopped, newest last: a fill that shows nothing says why here, not nowhere (#109). */
@@ -2761,13 +2808,6 @@ async function visualsFailed($: $, ask: string): Promise<void> {
   await update($, decision, held => held?.ask === ask ? { ...held, visualsFailed: true } : held)
 }
 
-/** One Haiku call; null when it does not answer. */
-async function haiku($: $, system: string, prompt: string, maxTokens: number): Promise<string | null> {
-  const r = await $.model.complete({ model: GATE_MODEL, system, prompt, maxTokens, timeoutMs: 30_000 })
-  return r.isAnswered ? r.text : null
-}
-
-/** Regex passed: gate, fork, fit, then show. Anything that fails shows nothing. */
 /** How often a decision that recommends a session card looks for the card's session (#67). */
 const CARD_POLL_MS = 3000
 
@@ -2789,7 +2829,7 @@ async function watchCards($: $): Promise<void> {
         const body = await $.fs.read(`${org}/${f.name}`).catch(() => '')
         const card = typeof body === 'string' ? startedCard(body) : null
         if (card !== null && held.tasks.includes(card)) {
-          await clearDecision($)
+          await clearDecision($, 'card started')
           return
         }
       }
@@ -2797,30 +2837,18 @@ async function watchCards($: $): Promise<void> {
   }
 }
 
-async function fillDeck($: $, answer: string, wrap: WrapUpAsk | null, epoch: number, cards: readonly string[] = [], asked = false): Promise<void> {
-  // A question the agent asked is a decision already; the gate only guesses at a reply's.
-  if (!asked) {
-    const gate = await haiku($, GATE_SYSTEM, gateText(answer, wrap), 5)
-    if (gate === null || !isYes(gate) || epoch !== deckEpoch) return fillStopped($, 'gate', gate ?? 'no answer')
+/**
+ * Shows the decision the agent declared this turn (issue 167): no model call. A question the agent asked on the row
+ * keeps its own buttons, so a declaration naming other options shows nothing.
+ */
+async function showDeclared($: $, declaredHere: HumanQueueDecision, wrap: WrapUpAsk | null, epoch: number, cards: readonly string[], asked: boolean): Promise<void> {
+  const parsed = asked && wrap !== null ? asButtons(declaredHere, wrap.actions) : declaredHere
+  if (parsed === null) {
+    await fillStopped($, 'options', JSON.stringify({ declared: declaredHere.options, asked: wrap?.actions ?? [] }))
+    if (epoch === deckEpoch && wrap !== null) await visualsFailed($, wrap.ask)
+    return
   }
-  /** A stop this turn's own question is still waiting on, which the pane says. */
-  const failed = async (stage: string, detail: string) => {
-    await fillStopped($, stage, detail)
-    if (asked && wrap !== null && epoch === deckEpoch) await visualsFailed($, wrap.ask)
-  }
-  const fork = await $.model.fork({ prompt: forkPrompt(wrap) })
-  if (epoch !== deckEpoch) return fillStopped($, 'fork', 'superseded')
-  if (!fork.isAnswered) return failed('fork', String((fork as { reason?: unknown }).reason ?? 'unanswered'))
-  const raw = parseForkJson(fork.text)
-  if (raw === null) return failed('json', fork.text.slice(-300))
-  const fitted = await fitFields(raw, (text, words) =>
-    haiku($, `Say this in ${words} words or fewer, Reply with the shorter text only.`, text, 120))
-  const forked = decisionFromFork(fitted)
-  if (forked === null) return failed('parse', JSON.stringify(fitted).slice(0, 300))
-  // The row's buttons are the agent's own options: a deck that names others would answer a different question.
-  const parsed = asked && wrap !== null ? asButtons(forked, wrap.actions) : forked
-  if (parsed === null) return failed('options', JSON.stringify({ fork: forked.options, asked: wrap?.actions ?? [] }))
-  if (epoch !== deckEpoch) return
+  if (epoch !== deckEpoch) return fillStopped($, 'stale', 'a new turn started before the decision showed')
   const shown = parsed
   const sends = optionSends(shown.options, wrap)
   await update($, decision, () => ({ ...shown, sends }))
@@ -3089,6 +3117,25 @@ export const register: Register = (on, _options) => {
         required: ['task'],
       },
     })
+    await $.tool.register({
+      name: 'decide',
+      description: DECIDE_DESCRIPTION,
+      // Behind ToolSearch, agents skipped it and the pane stayed empty (issue 167): its schema rides in the prompt.
+      isDeferred: false,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          headline: { type: 'string' },
+          ask: { type: 'string' },
+          options: { type: 'array', items: { type: 'string' } },
+          recommend: { type: 'string' },
+          dimensions: { type: 'array', items: { type: 'string' } },
+          cells: { type: 'array', items: { type: 'object' } },
+          pages: { type: 'array', items: { type: 'object' } },
+        },
+        required: ['headline', 'ask', 'options', 'recommend', 'dimensions', 'cells', 'pages'],
+      },
+    })
     // The tool each update_plan call is renamed to in the stream (issue 104): the same input, the app's reply.
     await $.tool.register({
       name: 'steps',
@@ -3215,13 +3262,14 @@ export const register: Register = (on, _options) => {
       const cards = turnCards
       const asked = askedThisTurn
       const permission = permissionThisTurn
+      const declaredHere = declaredThisTurn
       void (async () => {
         if (permission) return
-        if (asked !== null) {
-          return fillDeck($, e.answer, asked, epoch, cards, true).catch(() => epoch === deckEpoch ? visualsFailed($, asked.ask) : undefined)
-        }
+        // No declaration, no pages: a question asked on the row keeps its buttons, and nothing is guessed from the reply.
+        if (declaredHere === null) return fillStopped($, 'none', asked === null ? 'no question' : 'asked, not declared')
+        if (asked !== null) return showDeclared($, declaredHere, asked, epoch, cards, true)
         const wrap = wrapUpAsk(await $.session.messages().catch(() => []))
-        if (wrap !== null || looksLikeDecision(e.answer)) await fillDeck($, withoutGist(e.answer), wrap, epoch, cards)
+        return showDeclared($, declaredHere, wrap, epoch, cards, false)
       })().catch(() => undefined)
     }
     return result
@@ -3346,8 +3394,15 @@ export const register: Register = (on, _options) => {
         return next(e)
       }
     }
+    // The person's pressed answer has reached the agent: its own turn starts (issue 168).
+    if (e.agentId === undefined) {
+      const waiting = sentText(await read($, decision))
+      if (waiting !== null && e.text.includes(waiting)) await clearDecision($, 'sent answer arrived')
+    }
     deckEpoch += 1
     askedThisTurn = null
+    declaredThisTurn = null
+    declareAskedThisTurn = false
     permissionThisTurn = false
     turnCards = []
     if (e.agentId === undefined) renamesPlans = await renamesHere($)
@@ -3358,7 +3413,7 @@ export const register: Register = (on, _options) => {
   })
 
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear') await clearDecision($)
+    if (e.reason === 'clear') await clearDecision($, 'session cleared')
     agentReadEpoch += 1
     stateTaken = undefined
     // A /clear starts a new conversation: rulings no longer go back to the old one.
@@ -3453,7 +3508,15 @@ export const register: Register = (on, _options) => {
   on('tool.call', { tool: WRAP_UP_TOOL as typeof TOOL }, async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
     const input = e as unknown as Record<string, unknown>
+    // The stream already moved the question to the row (withoutWrapUpBox). Undeclared, the pane would be empty:
+    // the call goes back once for the declaration, and a second wrap-up goes through whatever it holds (issue 167).
     const asked = decisionOfWrapUp(input)
+    const question = asked !== null ? askOf(asked) : askedThisTurn
+    if (question !== null && declaredThisTurn === null && !permissionThisTurn && !declareAskedThisTurn) {
+      declareAskedThisTurn = true
+      await fillStopped($, 'sent back', question.ask)
+      return { deny: declareFirst(question) }
+    }
     if (asked === null) return next(e)
     await update($, decision, () => asked)
     askedThisTurn = askOf(asked)
@@ -3499,6 +3562,24 @@ export const register: Register = (on, _options) => {
     return result
   })
 
+  // The decide tool writes nothing outside the session's own pane, so it never asks (issue 167).
+  on('tool.check', { tool: DECIDE_TOOL as typeof TOOL }, async () => ({ decision: 'allow', reason: 'It only fills the Decision pane.' }))
+
+  // The agent's declaration, checked here and shown when its turn ends (issue 167).
+  on('tool.call', { tool: DECIDE_TOOL as typeof TOOL }, async ($, e) => {
+    if (e.agentId !== undefined) return { deny: 'Only the session\'s own agent declares a decision; a subagent reports to it instead.' }
+    const { tool: _tool, tool_use_id: _id, agentId: _agent, ...input } = e as unknown as Record<string, unknown>
+    const checked = declared(input)
+    if ('refused' in checked) {
+      await fillStopped($, 'refused', checked.refused.join('; '))
+      return { deny: `Not shown. Fix these and call decide again:\n${checked.refused.map(one => `- ${one}`).join('\n')}` }
+    }
+    declaredThisTurn = checked.decision
+    void fillStopped($, 'declared', `pages: ${(checked.decision.pages ?? []).map(page => page?.diagrams.map(one => one.draw.shape).join(' ') ?? 'none').join(' | ')}`)
+    const cut = checked.cut.length === 0 ? '' : ` Cut to fit: ${checked.cut.join(', ')}.`
+    return { result: `The Decision pane shows it when your turn ends.${cut} Ask your question as usual.` }
+  })
+
   on('tool.call', { tool: TASK_TOOL as typeof TOOL }, async ($, e) => {
     const input = e as unknown as { task?: unknown; detail?: unknown }
     const title = typeof input.task === 'string' ? input.task.trim().replace(/\s+/g, ' ') : ''
@@ -3523,6 +3604,13 @@ export const register: Register = (on, _options) => {
             `The person sees what you are working on in a band above their prompt. When you start a task, or your task ` +
             `changes, call ${TASK_TOOL} with it in under ten words and a sentence of detail; call it with an empty task ` +
             `when you finish and hand back to them.`,
+        },
+        {
+          id: 'vantage-point:decide',
+          scope: 'session' as const,
+          text:
+            `When your reply asks the person to choose between options or approve a step, call ${DECIDE_TOOL} in that ` +
+            `turn with the decision, before you end it: it fills the Decision pane, which shows nothing without it.`,
         },
         ...(gist ? [{ id: 'vantage-point:gist', scope: 'session' as const, text: GIST_SECTION }] : []),
         ...(state === null ? [] : [{ id: STATE_SECTION, scope: 'session' as const, text: state }]),
@@ -3594,7 +3682,8 @@ export const register: Register = (on, _options) => {
         return { drop: 'A fresh agent acted on the rulings, so this cold session was not woken. Its report is under ← for agents.' }
       }
     }
-    if (CAPTURED.has(e.origin.kind) && e.text.trim() !== '') await clearDecision($)
+    if ((await read($, decision)) !== null) await logRow($, 'prompt', `${JSON.stringify(e.origin)} ${e.text.slice(0, 24)}`)
+    if (CAPTURED.has(e.origin.kind) && e.text.trim() !== '') await clearDecision($, `prompt ${e.origin.kind}`)
     const target = await read($, capture)
     if (target === null || !CAPTURED.has(e.origin.kind) || e.text.trim() === '') return next(e)
     await update($, capture, () => null)
@@ -4118,7 +4207,14 @@ export const register: Register = (on, _options) => {
               <Button key="decision-headline" label={showing.headline} plain onPress={openDecision} />
               {/* Each option sends itself as the person's prompt (issue #22). The desktop paints a
                   Button's text in its own colour, so the recommended one's green is a dot beside it. */}
-              {[showing.recommend, ...showing.options.map((_, i) => i).filter(i => i !== showing.recommend)].map(i => [i, showing.options[i] as string] as const).map(([i, option]) => (
+              {/* A pressed option waits for the running turn to end (issue 168): it stays, sent, with nothing to press twice. */}
+              {showing.sent !== undefined ? (
+                <Box key="decision-sent" flexDirection="row" columnGap={1} paddingLeft={2}>
+                  <Text color={RECOMMENDED} bold>●</Text>
+                  <Text>{showing.options[showing.sent] ?? ''}</Text>
+                  <Text dimColor wrap="wrap">sent, reaches the agent when its turn ends</Text>
+                </Box>
+              ) : [showing.recommend, ...showing.options.map((_, i) => i).filter(i => i !== showing.recommend)].map(i => [i, showing.options[i] as string] as const).map(([i, option]) => (
                 <Box key={`decision-option-${i}`} flexDirection="row" columnGap={1} paddingLeft={2}>
                   {i === showing.recommend ? <Text color={RECOMMENDED} bold>●</Text> : <Text dimColor>●</Text>}
                   <Button
@@ -4126,7 +4222,7 @@ export const register: Register = (on, _options) => {
                     label={option}
                     plain
                     {...(i === showing.recommend ? {} : { dimColor: true })}
-                    onPress={() => (i === 0 && showing.grant !== undefined && allowedOnce.add(showing.grant), clearDecision($)).then(() => $.prompt.submit({ text: showing.sends?.[i] ?? option, asUser: true })).then(() => undefined)}
+                    onPress={() => sendChoice($, showing, i, 'row press')}
                   />
                 </Box>
               ))}
@@ -4684,7 +4780,7 @@ export const register: Register = (on, _options) => {
   })
 
   // The decision deck the reply row opens (#134): a tab per option, the recommended one first to show, each one page
-  // that fits the pane: what the option is, the diagrams that make its case, then Choose this. Tickets keep a tab.
+  // that scrolls (issue 167): what the option is, the diagrams that make its case, then Choose this. Tickets keep a tab.
   on('ui.render', { component: 'Pane', requestId: DECISION_PANE }, async ($, e) => {
     const elements = $.ui.resolve(e)
     const { Box, Button, Markdown, Text } = elements
@@ -4696,8 +4792,9 @@ export const register: Register = (on, _options) => {
     const cards = await read($, ticketStates)
     const openRows = await read($, ticketOpen)
     const newProps = takesNewProps(await engineBase($))
-    // The page's pictures fill the pane's body at its column measure, drawn 1:1.
-    const room = Math.round(e.props.bodyColumns * DECK_COLUMN_PT)
+    // The page's pictures are sized at the top of the body's width range and the desktop scales them to their tile,
+    // so their right edges meet the title's (issue 165's rule, applied to the deck in issue 167).
+    const room = cardWidth(e.props.bodyColumns)
     const rule = room + Math.round(2 * DECK_COLUMN_PT)
     const tabs = [...held.options, ...(replied.length === 0 ? [] : ['Issues'])]
     // A tab picked on another question gives way: each decision opens on its recommendation.
@@ -4748,7 +4845,7 @@ export const register: Register = (on, _options) => {
     )
     const caption = newProps ? { size: 'caption' as const } : {}
     const page = held.pages?.[shown] ?? null
-    // An option the fork wrote no page for shows how it compares instead, from its cells.
+    // An option with no page shows how it compares instead, from its cells.
     const compared: Diagram[] = page !== null || held.dimensions.length === 0 ? [] : [{
       point: 'why', title: 'How it compares',
       draw: { shape: 'lines', lines: held.dimensions.map((dimension, d) => ({ text: `${dimension} ${held.cells[d]?.[shown]?.value ?? ''}` })) },
@@ -4756,14 +4853,16 @@ export const register: Register = (on, _options) => {
     const what = page?.what ?? ''
     const scale = workScale(held.pages ?? [])
     const offered = page?.diagrams ?? compared
-    const fits = fitDiagrams(offered, room, paneHeight(e.props.scroll.bodyRows) - chromeHeight(held.headline, what, room, stacked ? tabs.length : 0), scale)
+    // Every diagram draws, the most decisive first, and the pane scrolls to hold them (issue 167): none gives way.
+    const fits = offered
     // `paired` draws the picture at half the page; `inRow` also sizes the tile to half its row (a column sizes it itself).
+    // A tile alone in its row spans it, so its frame meets its neighbours' edges whatever its picture's width (issue 167).
     const tile = (one: Diagram, i: number, paired: boolean, inRow = paired) => {
       const inner = pictureRoom(room, paired)
       const picture = Svg === undefined ? null : diagramPicture(one.draw, inner, scale)
       return (
         <Box key={`deck-diagram-${i}`} flexDirection="column" rowGap={1} borderStyle="round" borderColor={CARD_LINE} backgroundColor={FILL} paddingX={1}
-          {...(inRow ? { width: '50%', flexGrow: 1, flexShrink: 1 } : {})}>
+          {...(inRow ? { width: '50%', flexGrow: 1, flexShrink: 1 } : paired ? {} : { width: '100%' })}>
           <Text key="title" dimColor wrap="wrap">{one.title}</Text>
           {picture !== null && Svg !== undefined ? (
             <Box key="picture"><Svg source={picture.source} width={picture.width} height={picture.height} alt={picture.alt} /></Box>
@@ -4803,16 +4902,16 @@ export const register: Register = (on, _options) => {
             {row.map(one => tile(one, index(one), row.length === 2))}
           </Box>
         ))
-    // What gave way is said, so a narrow pane never hides that the page holds more.
-    const hidden = offered.length - fits.length
-    const more = hidden === 0 ? null : (
-      <Box key="deck-more"><Text dimColor {...caption}>{hidden === 1 ? '1 more diagram in a wider pane' : `${hidden} more diagrams in a wider pane`}</Text></Box>
-    )
     const option = held.options[shown]
-    const choose = option === undefined ? null : (
+    const sentOption = held.sent === undefined ? undefined : held.options[held.sent]
+    const choose = sentOption !== undefined ? (
+      <Box key="deck-sent" flexDirection="row">
+        <Text wrap="wrap">{`You chose ${sentOption}. It reaches the agent when its turn ends.`}</Text>
+      </Box>
+    ) : option === undefined ? null : (
       <Box key="deck-choose-row" flexDirection="row">
         <Button key="deck-choose" label={option}
-          onPress={() => (shown === 0 && held.grant !== undefined && allowedOnce.add(held.grant), clearDecision($)).then(() => $.prompt.submit({ text: held.sends?.[shown] ?? option, asUser: true })).then(() => undefined)} />
+          onPress={() => sendChoice($, held, shown, 'pane press')} />
       </Box>
     )
     // The tickets the reply names: a closed row each; ▸ opens its state, parent, labels and outline, ▸ again closes it.
@@ -4846,15 +4945,14 @@ export const register: Register = (on, _options) => {
       : [
           what === '' ? null : <Box key="deck-what"><Text wrap="wrap">{what}</Text></Box>,
           ...diagramRows,
-          more,
           // Nothing below the question is said, so a blank pane never reads as a broken one (#160).
           what !== '' || offered.length > 0 || held.grant !== undefined ? null : (
             <Box key="deck-none">{held.visualsFailed === true
               ? <Text color="error" wrap="wrap">The visuals for this decision could not be drawn.</Text>
-              : <Text dimColor wrap="wrap">No visuals for this decision yet.</Text>}</Box>
+              : <Text dimColor wrap="wrap">No pages for this decision: the agent did not describe its options.</Text>}</Box>
           ),
         ]
-    // The choose button sits at the pane's foot on every tab, so it never moves as the person compares (the design review of #134);
+    // The choose button sits at the pane's foot on a page that fits, and after the last diagram on one that scrolls (issue 167);
     // it says the option it chooses (issue 140).
     return (
       // A height of 100% drew as tall as the content; a minimum in rows, a line short of the pane's, holds the foot.

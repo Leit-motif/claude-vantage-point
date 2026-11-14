@@ -1,54 +1,13 @@
-// The decision deck fills itself after a reply (issue #14): a regex, a Haiku gate,
-// a tool-less fork of the session that writes the deck as JSON, then a Haiku pass
-// that shortens a field past its room. Pure: every model call and file read
-// comes in as a function, so the tests drive it without a session.
+// The decision deck (issue 167): the agent declares the decision itself through the decide
+// tool, in the turn it asks, so the deck costs no model call of its own. Pure: the
+// declaration in, a checked decision or what to fix out.
 import type { SessionMessage } from 'claude-code'
 import type { HumanQueueDecision } from '../types'
 
-import { pagesOf } from '../panes/visuals/options'
+import { diagramOf, pagesOf, POINTS } from '../panes/visuals/options'
 import { HEADLINE_WORDS, parseDecision } from './reply'
 
 export type Decision = HumanQueueDecision
-
-/** The model the gate and the compressor run on. */
-export const GATE_MODEL = 'haiku'
-
-/** A reply less its gist: the speed reader's `<gist>` sits after the question, hidden from the transcript, and is no part of the decision. */
-export const withoutGist = (answer: string) => answer.replace(/<gist>[\s\S]*?<\/gist>\s*$/, '')
-
-/**
- * A question the reply asks the person to choose on, anywhere in its prose (#133): one that
- * puts alternatives ("or") or a choosing word to the reader. Code, and a question the reply
- * answers in its next breath, ask nothing.
- */
-function asksToChoose(prose: string): boolean {
-  const plain = prose.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`\n]*`/g, ' ')
-  return plain.split(/(?<=[.!?])\s+/).some(sentence =>
-    sentence.trim().endsWith('?') &&
-    (/\b(which|should I|shall I|do you want|would you like|prefer|choose|pick|your call)\b/i.test(sentence) ||
-      /\b(you|I|we)\b[^?]*\bor\b/i.test(sentence)))
-}
-
-/**
- * Cheap, no model: does the reply ask the person something? A question mark in the
- * last paragraph, a choosing question anywhere in the prose (#133: it is often buried
- * mid-reply), or two or more listed options beside a choosing word or a question
- * (issue #23: the question often sits just above the list).
- * A markdown table's body rows are options too; its header and rule are not.
- */
-export function looksLikeDecision(answer: string): boolean {
-  if (asksToChoose(withoutGist(answer))) return true
-  const tail = withoutGist(answer).trim().slice(-1500)
-  const paragraphs = tail.split(/\n\s*\n/)
-  const last = paragraphs[paragraphs.length - 1] ?? ''
-  if (/\?\s*(\*\*|_|`)?\s*$/m.test(last)) return true
-  const listed = tail.match(/^\s*(\d+[.)]|[A-D][.):]|[-*]\s+\*\*)/gm) ?? []
-  const rows = tail.split('\n').filter(line => /^\s*\|/.test(line))
-  const rules = rows.filter(line => /^\s*\|[\s:|-]+$/.test(line)).length
-  const options = listed.length + Math.max(0, rows.length - 2 * rules)
-  const choosing = /\b(which|prefer|choose|pick|want|should I|let me know|your call)\b/i.test(tail)
-  return options >= 2 && (choosing || /\?\s*(\*\*|_|`)?\s*$/m.test(tail))
-}
 
 /** The desktop app's end-of-turn box: an agent may put its question there, not in its reply. */
 export const WRAP_UP_TOOL = 'mcp__ccd_turn__wrap_up'
@@ -185,42 +144,23 @@ export function boxlessWrapUp(json: string): 'partial' | { json: string | null; 
   return { json: JSON.stringify(recap), decision: decisionOfWrapUp(input as Record<string, unknown>) }
 }
 
-/**
- * The wrap-up box as lines of text: its question, then its buttons as their labels read, and which is the
- * recommendation on a line of its own, since the fork copies the labels and a marked one was a different option (#121).
- */
-const wrapUpLines = (wrap: WrapUpAsk) =>
-  [`Question: ${wrap.ask}`, ...wrap.actions.map(label => `- ${label}`), 'The first button is the recommendation.'].join('\n')
-
-/** An option as a button's label is matched: no case, no `(recommended)` the fork copied, no stops at its edges. */
+/** An option as a button's label is matched: no case, no `(recommended)` the agent copied, no stops at its edges. */
 const optionKey = (option: string) => option.toLowerCase().replace(/\(recommended\)/g, '').replace(/^[\s.,;:!?*_`"']+|[\s.,;:!?*_`"']+$/g, '')
 
 /**
- * A deck decision whose options are the wrap-up buttons, each relabelled to its button's own words so its send
- * matches, in the fork's order so its cells and recommendation still hold; null when they are other options.
+ * A deck decision whose options take the wrap-up buttons' own words, each relabelled so its send matches, in the
+ * declaration's order so its cells, pages and recommendation still hold. The box holds at most two buttons, so a
+ * declared option with no button keeps its own label and sends it. Null when a button names no declared option.
  */
 export function asButtons<D extends { options: readonly string[] }>(decision: D, actions: readonly string[]): D | null {
-  if (decision.options.length !== actions.length) return null
-  const options = decision.options.map(option => actions.find(label => optionKey(label) === optionKey(option)))
-  if (options.some(label => label === undefined) || new Set(options).size !== options.length) return null
-  return { ...decision, options: options as string[] }
+  const matched = actions.map(label => decision.options.findIndex(option => optionKey(option) === optionKey(label)))
+  if (matched.some(i => i < 0) || new Set(matched).size !== matched.length) return null
+  const options = decision.options.map((option, i) => {
+    const button = matched.indexOf(i)
+    return button < 0 ? option : actions[button]
+  })
+  return { ...decision, options }
 }
-
-/** What the gate reads: the whole reply, and the wrap-up box's question after it. */
-export function gateText(answer: string, wrap: WrapUpAsk | null): string {
-  // The whole reply: its one question is often buried mid-reply (#133). The cap only bounds a runaway reply.
-  const text = answer.trim().slice(-40_000)
-  return wrap === null ? text : `${text}\n\nThe reply ended with this question in its end-of-turn box:\n${wrapUpLines(wrap)}`
-}
-
-export const GATE_SYSTEM =
-  'You read an AI coding assistant reply. Answer YES if anywhere in it, at the end or buried in the middle, ' +
-  'it asks the person to decide, choose, or approve something before work can go on. Answer NO for rhetorical ' +
-  'questions it answers itself, pleasantries such as "anything else?", or a reply that just reports. ' +
-  'Reply with YES or NO only.'
-
-/** The gate's verdict from Haiku's text. */
-export const isYes = (text: string) => /^\s*yes\b/i.test(text)
 
 const SHAPE =
   '{"headline": string, "ask": string, "options": [string], ' +
@@ -228,14 +168,14 @@ const SHAPE =
   '"tone": "advantage" | "neutral" | "tradeoff"}], "recommend": string, ' +
   '"pages": [{"option": string, "what": string, "diagrams": [diagram]}]}'
 
-/** The diagrams a page draws, as the fork reads them (#134): each point, what its title says, and the shapes that draw it. */
+/** The diagrams a page draws, as the agent reads them (#134): each point, what its title says, and the shapes that draw it. */
 const DIAGRAMS_GUIDE =
   'A diagram is {"point", "title", "draw", "says"?, "terms"?}. point: "why" (on the recommended option, what makes ' +
   'it worth doing; on another, why you would pick it), "how" (how it works), "work" (who does the work: the time ' +
   'it takes you and what falls to the person), "control" (on the recommended option, what you control), "passed" ' +
-  '(on another option, why you did not recommend it) or "risk" (what could go wrong, with its fallback). Each page ' +
-  'has a why, a how, a work, a control or a passed, and a risk, in that order: every option has something that ' +
-  'could go wrong, and its page says what and the fallback. title: the point ' +
+  '(on another option, why you did not recommend it) or "risk" (what could go wrong, with its fallback). Put first ' +
+  'the diagram that most decides the choice: the person reads top down, and the pane scrolls to hold every one. ' +
+  'Every option has something that could go wrong, and its page says what and the fallback. title: the point ' +
   'the diagram makes, led by its kind, the point always said ("Why: today\'s footage stutters", "How: both routes ' +
   'use the same macOS recorder", "Who does the work: nearly all mine", "What I control: every press, to the frame", ' +
   '"Why I didn\'t recommend it: the setup falls to you", "What could go wrong: an off-screen window may not ' +
@@ -262,80 +202,79 @@ const DIAGRAMS_GUIDE =
   'twelve words to a line, and no count, term or name from this session (a scene\'s nickname) a newcomer could ' +
   'not read.'
 
-export const FORK_PROMPT =
-  '[vantage-point] This message is from the vantage-point plugin, not the person. Do not use tools and do not ' +
-  'answer your own question. Your last reply asked the person to decide something. Describe that decision as ' +
-  `JSON only, no code fence, in this shape: ${SHAPE}. headline: the question your options answer, in plain words ` +
-  'a newcomer reads, twelve words or fewer, naming no technical term; with three options, or two that are not a ' +
-  'yes and a no, it asks which, never "Should I ...?" (How should I record the film\'s product shots?): the band ' +
-  'and the deck head with it. ask: the ' +
-  'same question in one sentence. options: ' +
-  'the two or three you offered, as short imperative labels. dimensions: two or three questions that tell them ' +
-  'apart. One cell for every option and dimension: a value of three words or fewer, tone advantage (good), neutral ' +
-  '(middling) or tradeoff (bad). recommend: one option, exactly as written. pages: one for every option, not only ' +
-  'the recommended one, its option written exactly as in options. The person reads each page on its own tab, one ' +
-  'screen with no scrolling, and is not a specialist in this field: write in plain words. what: one sentence on what ' +
-  'the option is, for someone who has never heard of it. diagrams: 3 to 5. ' + DIAGRAMS_GUIDE + ' Use only what the ' +
-  'reply, the session or the files you read state; a guess says so ("untested").'
-/** The way out for a decision guessed from a reply; a question the agent asked always has one (#160). */
-const NO_CHOICE = ' If there is no real choice, reply {}.'
-
-/** The fork's prompt, told the wrap-up box's question when the reply asked there. */
-export function forkPrompt(wrap: WrapUpAsk | null): string {
-  if (wrap === null) return FORK_PROMPT + NO_CHOICE
-  return `${FORK_PROMPT} You asked the question in the end-of-turn box, not in your reply text:\n${wrapUpLines(wrap)}\n` +
-    'Your options are its buttons\' labels, copied exactly and in their order: ' +
-    'a deck whose options differ from them is dropped. This is a real choice even as a plain yes or no: describe it.'
-}
-
-/** The fork may wrap its JSON in prose or a fence: take the outermost braces. */
-export function parseForkJson(text: string): Record<string, unknown> | null {
-  const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
-  if (start < 0 || end <= start) return null
-  try {
-    const value: unknown = JSON.parse(text.slice(start, end + 1))
-    return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null
-  } catch {
-    return null
-  }
-}
-
-/** Says a text in at most `words` words: one Haiku call. Null when it cannot. */
-export type Compress = (text: string, words: number) => Promise<string | null>
-
+/** Words a field holds, past which the declaration cuts it (#14: limits are space, never a refusal). */
 const wordCount = (text: string) => text.trim().split(/\s+/).filter(Boolean).length
 const cutWords = (text: string, words: number) => text.trim().split(/\s+/).slice(0, words).join(' ')
 
-/**
- * Limits are space, not refusals: a text over its room goes to the compressor
- * once, and what still overflows is cut to the room. Citations survive a cut
- * only when they still fit.
- */
-export async function fitFields(raw: Record<string, unknown>, compress: Compress): Promise<Record<string, unknown>> {
-  const fit = async (value: unknown, words: number): Promise<unknown> => {
+/** What the decide tool tells the agent: when to call it, and the shape it takes. */
+export const DECIDE_DESCRIPTION =
+  'Show the person the decision you are asking them to make, in the Decision pane the band\'s reply row opens. Call it ' +
+  'once in any turn whose reply asks the person to choose between options or approve a step, before you end the turn, ' +
+  'with the same options you offer in your reply or end-of-turn box. It costs no model call: you write it, nothing ' +
+  `runs after you. The input is ${SHAPE}. headline: the question your options answer, in plain words a newcomer ` +
+  'reads, twelve words or fewer, naming no technical term; with three options, or two that are not a yes and a no, ' +
+  'it asks which, never "Should I ...?". ask: the same question in one sentence. options: the two or three you offer, ' +
+  'as short imperative labels, the same words as your end-of-turn buttons when you use them (the box holds two, so ' +
+  'a third option needs no button). Call this before the end-of-turn box. dimensions: two or three ' +
+  'questions that tell them apart. One cell for every option and dimension: a value of three words or fewer, tone ' +
+  'advantage (good), neutral (middling) or tradeoff (bad). recommend: one option, exactly as written. pages: one for ' +
+  'every option, its option written exactly as in options. The person reads each page on its own tab and is not a ' +
+  'specialist in this field: write in plain words. what: one sentence on what the option is, for someone who has ' +
+  'never heard of it. diagrams: 1 to 5, only those that carry an argument. ' + DIAGRAMS_GUIDE + ' Use only what you ' +
+  'know from this session or checked with your tools; a guess says so ("untested"). A field over its words is cut ' +
+  'to fit; a broken structure is refused with what to fix, and the pane shows nothing until a call passes.'
+
+/** A declaration the pane can draw, with any field cut to its room; or what to fix, when its structure is broken. */
+export type Declared = { decision: Decision; cut: string[] } | { refused: string[] }
+
+/** The decide tool's input as a decision (issue 167): fields over their room are cut, a broken structure is refused, every option needs a page whose every diagram draws. */
+export function declared(input: Record<string, unknown>): Declared {
+  const cut: string[] = []
+  const fit = (value: unknown, words: number, name: string): unknown => {
     if (typeof value !== 'string' || wordCount(value) <= words) return value
-    const shorter = await compress(value, words).catch(() => null)
-    if (shorter !== null && wordCount(shorter) <= words && shorter.trim() !== '') return shorter.trim()
+    cut.push(`${name} cut to ${words} words`)
     return cutWords(value, words)
   }
-  const out: Record<string, unknown> = { ...raw }
-  out.headline = await fit(raw.headline, HEADLINE_WORDS)
-  if (Array.isArray(raw.cells)) {
-    out.cells = await Promise.all(raw.cells.map(async cell =>
-      typeof cell === 'object' && cell !== null ? { ...cell, value: await fit((cell as Record<string, unknown>).value, 3) } : cell))
+  const raw: Record<string, unknown> = { ...input, headline: fit(input.headline, HEADLINE_WORDS, 'headline') }
+  if (typeof input.ask === 'string') {
+    const first = input.ask.trim().split(/(?<=[.!?])\s+/)[0]
+    if (first !== input.ask.trim()) cut.push('ask cut to its first sentence')
+    raw.ask = first
   }
-  // An ask longer than one sentence keeps its first.
-  if (typeof raw.ask === 'string') out.ask = raw.ask.trim().split(/(?<=[.!?])\s+/)[0]
-  return out
-}
-
-/** The fork's JSON as a decision, each option's page with it (#134), or null when its structure is broken. A page that fails is left out. */
-export function decisionFromFork(raw: Record<string, unknown>): Decision | null {
+  if (Array.isArray(input.cells)) {
+    raw.cells = input.cells.map((cell, i) =>
+      typeof cell === 'object' && cell !== null ? { ...cell, value: fit((cell as Record<string, unknown>).value, 3, `cells[${i}].value`) } : cell)
+  }
   const decision = parseDecision(raw)
-  if (decision === null) return null
-  const pages = pagesOf(raw.pages, decision.options)
-  return pages === undefined ? decision : { ...decision, pages }
+  if (decision === null) {
+    const refused: string[] = []
+    const strings = (value: unknown) => Array.isArray(value) ? value.filter(one => typeof one === 'string' && one.trim() !== '') : []
+    if (typeof raw.headline !== 'string' || raw.headline.trim() === '') refused.push('headline: the question, twelve words or fewer')
+    if (typeof raw.ask !== 'string' || raw.ask.trim() === '') refused.push('ask: the question in one sentence')
+    const options = strings(raw.options)
+    if (options.length < 2 || options.length > 3 || new Set(options).size !== options.length) refused.push('options: two or three different labels')
+    const dimensions = strings(raw.dimensions)
+    if (dimensions.length < 2 || dimensions.length > 3 || new Set(dimensions).size !== dimensions.length) refused.push('dimensions: two or three different questions')
+    if (!options.includes(typeof raw.recommend === 'string' ? raw.recommend.trim() : '')) refused.push('recommend: one of options, exactly as written')
+    if (refused.length === 0) refused.push('cells: exactly one {option, dimension, value, tone} for every option and dimension, each named exactly as in options and dimensions, tone advantage, neutral or tradeoff')
+    return { refused }
+  }
+  const given = Array.isArray(input.pages) ? input.pages : []
+  const refused: string[] = []
+  decision.options.forEach(option => {
+    const page = given.find(one => typeof one === 'object' && one !== null && typeof (one as Record<string, unknown>).option === 'string' &&
+      ((one as Record<string, unknown>).option as string).trim().toLowerCase() === option.trim().toLowerCase()) as Record<string, unknown> | undefined
+    if (page === undefined) return void refused.push(`pages: no page for "${option}"`)
+    if (typeof page.what !== 'string' || page.what.trim() === '') refused.push(`pages["${option}"].what: one sentence on what the option is`)
+    const diagrams = Array.isArray(page.diagrams) ? page.diagrams : []
+    if (diagrams.length === 0) refused.push(`pages["${option}"].diagrams: at least one`)
+    diagrams.forEach((one, i) => {
+      if (diagramOf(one) === null) refused.push(`pages["${option}"].diagrams[${i}]: needs a point (${POINTS.join(', ')}), a title, and a draw of one shape with every field it needs`)
+    })
+  })
+  if (refused.length > 0) return { refused }
+  const pages = pagesOf(given, decision.options)
+  return { decision: pages === undefined ? decision : { ...decision, pages }, cut }
 }
 
 /**

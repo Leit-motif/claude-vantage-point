@@ -50,7 +50,7 @@ When a reply ends by asking you to choose, its options appear on one line above 
 
 To weigh them first, open the decision deck beside the chat. It has a tab for each option and opens on the recommended one.
 
-<img src="media/deck.png" width="405" alt="The decision deck beside the chat, on its recommended option, Fix line endings first, marked green: a sentence on what the option is, a diagram of why recurring items depend on the fix, a note that four more diagrams show in a wider pane, and a button named Fix line endings first">
+<img src="media/deck.png" width="405" alt="The decision deck beside the chat, on its recommended option, Fix line endings first, marked green: a sentence on what the option is, a diagram of why recurring items depend on the fix, and a button named Fix line endings first">
 
 *Each option makes its case on a page of its own, and one button sends it.*
 
@@ -97,11 +97,11 @@ Vantage Point runs inside Claude Code on your machine. It has no server of its o
 - **From the web.** Pictures an ask links to, fetched from their links; GitHub uploads go through `gh`.
 - **To GitHub.** Vantage Point writes only when you act on an issue in the queue. Submitting rulings posts them as one comment and changes the issue's label so it stops waiting on you. On a to-do, **Done** closes the issue and **Hand to agent** relabels it for an agent; Undo takes either back. Without `gh`, asks in `human-queue.md` still work.
 - **Claude usage.** Every model call runs on your Claude Code session's own access:
-  - *The decision deck.* On each reply that looks like a choice, a Haiku call checks that it is one, a fork of the session writes the deck from its prompt cache, and Haiku shortens any text too long for its place. There is no setting to turn this off yet.
+  - *The decision deck.* No model call of its own: the agent describes the decision with the `decide` tool in the turn it asks, as part of its reply.
   - *Rulings.* Handing your rulings back starts a turn for the agent that asked. When that session's cache has gone cold with a large context, a fresh agent takes them instead and does the follow-up work they unblock in your repository.
   - *Keep warm.* A short ping before each expiry while a session is armed. Off until you arm it.
   - *The tour.* Each Try.
-- **Your agent's instructions.** It adds a line to the system prompt asking agents to declare their task with the `task` tool, and, on a branch that names an issue, says which issue that is. With the `readerGist` setting on, the default, another line asks them to end a long reply with a short gist.
+- **Your agent's instructions.** It adds a line to the system prompt asking agents to declare their task with the `task` tool, another asking them to describe a decision with the `decide` tool, and, on a branch that names an issue, says which issue that is. With the `readerGist` setting on, the default, another line asks them to end a long reply with a short gist.
 - **The app's own prompts.** When your agent asks you a multiple-choice question, in the app's dialog or its wrap-up box, the question moves to the reply row. While a phone is attached through Remote Control, a permission prompt also asks on the reply row, with Allow once and Deny. In the desktop app the band shows the agent's task list in place of the app's own; `/vantage-point steps` gives it back.
 
 ## Compatibility and limitations

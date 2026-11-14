@@ -1,11 +1,11 @@
 // The Decision pane's option pages (#134): one tab per option, each a sentence on
-// what the option is and the diagrams that make its case, fitted to the pane so it
-// never scrolls. Pure: the fork's JSON in, checked pages out, and each diagram's
-// picture as an SVG source at the width it fills.
+// what the option is and the diagrams that make its case, the page scrolling to hold
+// them all (issue 167). Pure: the agent's declaration in, checked pages out, and each
+// diagram's picture as an SVG source at the width it fills.
 import type { HumanQueueDiagram, HumanQueueDiagramDraw, HumanQueueDiagramPoint, HumanQueueOptionPage } from '../../types'
 import { FILL, QUIET, REST_LINE, SIGNAL_YELLOW, TEXT } from '../../hooks/signal.ts'
 import { esc, sfWidth } from '../svg.ts'
-import { clip, LINE, type Picture, SMALL, svg, t, textWidth } from './draw.ts'
+import { CELL_PX, clip, LINE, type Picture, SMALL, svg, t, textWidth } from './draw.ts'
 
 export type OptionPage = HumanQueueOptionPage
 export type Diagram = HumanQueueDiagram
@@ -28,7 +28,7 @@ function some<T>(value: unknown, parse: (one: unknown) => T | null, max = MAX_RO
 }
 const optional = <K extends string, V>(key: K, value: V | null | undefined) => (value === null || value === undefined ? {} : { [key]: value }) as Partial<Record<K, V>>
 
-/** A diagram's picture as the fork wrote it, or null when its shape is unknown or holds nothing. */
+/** A diagram's picture as the agent wrote it, or null when its shape is unknown or holds nothing. */
 export function drawOf(value: unknown): HumanQueueDiagramDraw | null {
   const raw = object(value)
   switch (raw?.shape) {
@@ -56,7 +56,7 @@ export function drawOf(value: unknown): HumanQueueDiagramDraw | null {
         const who = row?.who === 'me' ? 'me' as const : row?.who === 'you' ? 'you' as const : null
         return who === null || minutes === null ? null : { who, minutes, ...optional('plus', text(row?.plus)) }
       }, 2)
-      // Nothing for either side is no chart: the fork is told to leave it out, and one that slips through drops.
+      // Nothing for either side is no chart: the agent is told to leave it out, and one that slips through drops.
       return rows === null || rows.every(r => r.minutes === 0 && r.plus === undefined) ? null : { shape: 'work', rows }
     }
     case 'lines': {
@@ -110,7 +110,7 @@ function explainedOnce(diagrams: Diagram[]): Diagram[] {
 }
 
 /**
- * The fork's pages by option index: each page names its option exactly, says what it is, and keeps the
+ * The declared pages by option index: each page names its option exactly, says what it is, and keeps the
  * diagrams that parse. An option with no page is null; undefined when no option has one.
  */
 export function pagesOf(value: unknown, options: readonly string[]): (OptionPage | null)[] | undefined {
@@ -383,15 +383,15 @@ export function columnsOf(diagrams: readonly Diagram[], room: number, scale: num
   return columns
 }
 
-// --- Fitting the page -------------------------------------------------------------
+// --- Sizing the tiles -------------------------------------------------------------
 
 /** A line of body text in the pane, and a step between blocks, in points (docs/palette.md). */
 const LINE_PT = 20
 const STEP_PT = 10
 /** A tile's frame: its border and the padding a round Box keeps above and below. */
 const TILE_PT = 26
-/** The padding and border a tile keeps at each side, in pixels: what its picture's width loses. */
-export const TILE_INSET = 26
+/** The padding and border a tile keeps, both sides together, in pixels: what its picture's width loses (a cell and a border each side, as `hooks/composed.tsx` measures it). */
+export const TILE_INSET = 2 * CELL_PX + 2
 
 /** How many lines `said` wraps to in `room` points of body text. */
 const linesOf = (said: string, room: number, size = 13) => Math.max(1, Math.ceil(sfWidth(said, size) / Math.max(80, room)))
@@ -408,45 +408,3 @@ export function tileHeight(one: Diagram, room: number, paired: boolean, scale: n
   const terms = (one.terms ?? []).reduce((sum, term) => sum + linesOf(`${term.term} ${term.meaning}`, inner, 12) * 18, 0)
   return TILE_PT + linesOf(one.title, inner, 12) * 18 + STEP_PT + body + says + (terms === 0 ? 0 : STEP_PT + terms)
 }
-
-/** About how tall the diagrams draw, in two columns on a wide page, else in rows, gaps between them included. */
-export function diagramsHeight(diagrams: readonly Diagram[], room: number, scale: number): number {
-  const stack = (tiles: readonly Diagram[]) => tiles.reduce((sum, one) => sum + tileHeight(one, room, true, scale), 0) + Math.max(0, tiles.length - 1) * STEP_PT
-  if (room >= WIDE_ROOM) return Math.max(...columnsOf(diagrams, room, scale).map(stack))
-  const rows = rowsOf(diagrams, room)
-  return rows.reduce((sum, row) => sum + Math.max(...row.map(one => tileHeight(one, room, row.length === 2, scale))), 0) + Math.max(0, rows.length - 1) * STEP_PT
-}
-
-/** The order diagrams give way in when a page would scroll: what the agent controls first, why last. */
-const GIVES_WAY: readonly HumanQueueDiagramPoint[] = ['control', 'work', 'risk', 'how', 'passed', 'why']
-
-/**
- * The diagrams that fit in `height` points, in the fork's order: a page never scrolls (#134), so while
- * they overflow, the diagram whose point matters least gives way. The first always stays.
- */
-export function fitDiagrams(diagrams: readonly Diagram[], room: number, height: number, scale: number): Diagram[] {
-  let kept = [...diagrams]
-  while (kept.length > 1 && diagramsHeight(kept, room, scale) > height) {
-    const drop = GIVES_WAY.map(point => kept.findLastIndex(one => one.point === point)).find(i => i > 0) ?? kept.length - 1
-    kept = kept.filter((_, i) => i !== drop)
-  }
-  // A diagram that gave way to make room may still be shorter than the room left: the most important comes back first.
-  const order = (one: Diagram) => -GIVES_WAY.indexOf(one.point)
-  for (const one of diagrams.filter(d => !kept.includes(d)).sort((a, b) => order(a) - order(b))) {
-    const tried = diagrams.filter(d => kept.includes(d) || d === one)
-    if (diagramsHeight(tried, room, scale) <= height) kept = tried
-  }
-  return kept
-}
-
-/**
- * What the page holds above and below its diagrams, in points: the question, the tab row (a line a tab once they
- * stack), the sentence on what the option is, the line saying what gave way, Choose this, and the steps between them.
- */
-export function chromeHeight(question: string, what: string, room: number, stackedTabs = 0): number {
-  const tabs = stackedTabs === 0 ? 34 : stackedTabs * 20 + 6
-  return linesOf(question, room, 15) * 24 + STEP_PT + tabs + STEP_PT + linesOf(what, room, 14) * 22 + STEP_PT + 20 + STEP_PT + STEP_PT + 30
-}
-
-/** The pane's height in points from its body rows: 36 rows drew about 740pt (desktop, 2026-11-01, #134). */
-export const paneHeight = (bodyRows: number) => bodyRows * 20

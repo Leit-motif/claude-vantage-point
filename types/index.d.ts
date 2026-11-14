@@ -190,6 +190,11 @@ export type HumanQueueDecision = {
   pages?: (HumanQueueOptionPage | null)[]
   /** The fork's visuals for this asked question stopped short (#160); the pane says so. */
   visualsFailed?: boolean
+  /**
+   * The option the person pressed, by index, while its prompt waits for the running turn to end
+   * (issue 168): the row and the pane say it is sent, and it clears when that prompt's turn starts.
+   */
+  sent?: number
 }
 /** One option's page (#134): a sentence on what it is, then its diagrams, each titled with the point it makes. */
 export type HumanQueueOptionPage = { what: string; diagrams: HumanQueueDiagram[] }
