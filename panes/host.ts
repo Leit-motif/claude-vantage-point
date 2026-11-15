@@ -13,6 +13,7 @@ export type HostEnv = {
   APPDATA?: string
   LOCALAPPDATA?: string
   ProgramFiles?: string
+  'ProgramFiles(x86)'?: string
   CLAUDE_CODE_GIT_BASH_PATH?: string
 }
 
@@ -86,6 +87,64 @@ export function openArgv(host: Host, target: string): string[] {
 export function removeArgv(host: Host, path: string): string[] {
   // del reads a `/` as the start of a switch, so the path goes with Windows' own separators.
   return host.os === 'windows' ? ['cmd', '/d', '/c', 'del', '/f', '/q', path.replace(/\//g, '\\')] : ['rm', '-f', path]
+}
+
+/** The argv that makes a folder and any missing above it; one that is already there is no failure on macOS, and an exit to ignore on Windows. */
+export function makeDirArgv(host: Host, dir: string): string[] {
+  return host.os === 'windows' ? ['cmd', '/d', '/c', 'mkdir', dir.replace(/\//g, '\\')] : ['mkdir', '-p', dir]
+}
+
+/** The argv that deletes a folder and everything in it, such as a browser's throwaway profile. */
+export function removeTreeArgv(host: Host, dir: string): string[] {
+  return host.os === 'windows' ? ['cmd', '/d', '/c', 'rmdir', '/s', '/q', dir.replace(/\//g, '\\')] : ['rm', '-rf', dir]
+}
+
+/**
+ * Where a Chromium browser that lays a page out headless may be, Chrome first, then Edge (issue 175).
+ * On Windows each is at its installer's default: per machine, then per user for Chrome.
+ */
+export function browserCandidates(env: HostEnv): string[] {
+  if (!isWindows(env)) return ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge']
+  const x86 = env['ProgramFiles(x86)']
+  const found = [
+    env.ProgramFiles && `${env.ProgramFiles}\\Google\\Chrome\\Application\\chrome.exe`,
+    x86 && `${x86}\\Google\\Chrome\\Application\\chrome.exe`,
+    env.LOCALAPPDATA && `${env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
+    x86 && `${x86}\\Microsoft\\Edge\\Application\\msedge.exe`,
+    env.ProgramFiles && `${env.ProgramFiles}\\Microsoft\\Edge\\Application\\msedge.exe`,
+  ]
+  return [...new Set(found.filter((one): one is string => typeof one === 'string' && one !== ''))]
+}
+
+/**
+ * The argv that lays the page at `url` out in `browser`, headless, and prints its DOM once its own
+ * script has run: a throwaway profile at `profile`, no extensions, and every request sent to a
+ * dead proxy, loopback included, so nothing reaches the network. The same flags on both systems.
+ */
+export function layoutArgv(browser: string, profile: string, url: string, width: number, height: number): string[] {
+  return [
+    browser,
+    '--headless=new',
+    '--disable-gpu',
+    '--disable-extensions',
+    '--disable-background-networking',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--hide-scrollbars',
+    `--user-data-dir=${profile}`,
+    '--proxy-server=127.0.0.1:9',
+    '--proxy-bypass-list=<-loopback>',
+    '--virtual-time-budget=2000',
+    `--window-size=${width},${height}`,
+    '--dump-dom',
+    url,
+  ]
+}
+
+/** The `file:` URL of an absolute path on either system (`/x` or `C:\\x`). */
+export function fileUrlOf(path: string): string {
+  const forward = slashed(path)
+  return `file://${forward.startsWith('/') ? '' : '/'}${encodeURI(forward).replace(/\?/g, '%3F').replace(/#/g, '%23')}`
 }
 
 /** The argv that prints the person's local date as YYYY-MM-DD, or null where nothing can. */

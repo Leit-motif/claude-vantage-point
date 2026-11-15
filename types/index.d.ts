@@ -166,17 +166,11 @@ export type HumanQueueReading = {
   wpm: number
 } | null
 
-/** A cell's tone in a declared decision: advantage, a tradeoff, or neither. */
-export type HumanQueueDecisionTone = 'advantage' | 'tradeoff' | 'neutral'
-
 /** The decision this session's agent declared for the reply row. */
 export type HumanQueueDecision = {
   headline: string
   ask: string
   options: string[]
-  dimensions: string[]
-  /** `cells[dimension][option]`. */
-  cells: { value: string; tone: HumanQueueDecisionTone }[][]
   /** Index into `options`. */
   recommend: number
   /** What pressing each option sends as the person's prompt, by index; absent, the option's own words. */
@@ -184,10 +178,11 @@ export type HumanQueueDecision = {
   /** A permission ask's call (`callKey`): pressing the first option lets it run once when the agent repeats it. */
   grant?: string
   /**
-   * Each option's page in the Decision pane (#134), by option index: what the option is, then the
-   * diagrams that make its case. Absent where the fork wrote none; that option's tab draws its cells.
+   * Each option's checked case in the Decision pane (spec 171, ADR 0054), by option index, so a page stays with its
+   * option when the wrap-up's buttons relabel it. Absent where the agent declared none: a wrap-up question, an
+   * AskUserQuestion, a permission ask.
    */
-  pages?: (HumanQueueOptionPage | null)[]
+  pages?: HumanQueueOptionPage[]
   /** The fork's visuals for this asked question stopped short (#160); the pane says so. */
   visualsFailed?: boolean
   /**
@@ -196,34 +191,75 @@ export type HumanQueueDecision = {
    */
   sent?: number
 }
-/** One option's page (#134): a sentence on what it is, then its diagrams, each titled with the point it makes. */
-export type HumanQueueOptionPage = { what: string; diagrams: HumanQueueDiagram[] }
+/** An encoded image the pane draws as a plain Svg (palette: a data-URI bitmap draws there), at its pixel size. */
+export type HumanQueueImage = { base64: string; mime: 'image/png' | 'image/avif' | 'image/jpeg'; width: number; height: number }
 /**
- * What a diagram argues: why (or why you'd pick it), how it works, who does the work, what the agent
- * controls, why the agent passed it over, or what could go wrong.
+ * A screenshot an argument rests on (spec 176): an image file this session captured or read, cropped to the part the
+ * claim names, encoded by the tool (never by the agent). `frame` is the whole file, small, for its Sources entry, with
+ * the crop outlined there; `before` is a fix's failing state at the same crop and scale. `surface`, `build` and `commit`
+ * are what the shot was taken of, read from the sidecar `<file>.json` the shot script wrote when it took it, and absent
+ * without one; `at` is when the file was written (epoch ms).
  */
-export type HumanQueueDiagramPoint = 'why' | 'how' | 'work' | 'control' | 'passed' | 'risk'
-/** One diagram: its title is the point it makes, `says` the sentence under it, `terms` the words it explains. */
-export type HumanQueueDiagram = {
-  point: HumanQueueDiagramPoint
-  title: string
-  draw: HumanQueueDiagramDraw
-  says?: string
-  terms?: { term: string; meaning: string }[]
+export type HumanQueueShot = {
+  file: string
+  crop?: { x: number; y: number; w: number; h: number }
+  /**
+   * The one point a shot marks, in the file's pixels, its label, and the side of the point its ring draws on, where the
+   * image has empty space (absent, above-right).
+   */
+  callout?: { x: number; y: number; label: string; side?: 'right' | 'left' | 'above' | 'below' }
+  /** The file's pixel size, the space `crop` and `callout` are in, so the pane can outline the crop on `frame`. */
+  size?: { width: number; height: number }
+  /** The file's pixels per point, from its sidecar: 2 for a full-resolution Retina capture; absent, 1. */
+  scale?: number
+  surface?: string
+  build?: string
+  commit?: string
+  at: number
+  image: HumanQueueImage
+  frame?: HumanQueueImage
+  /**
+   * A fix's failing state: its file, its crop in that file's pixels (the whole file without one), and its encode; its
+   * own sidecar's surface, build and commit, when it was written, its size and its own whole frame for Sources.
+   */
+  before?: {
+    file: string
+    crop?: { x: number; y: number; w: number; h: number }
+    image: HumanQueueImage
+    surface?: string
+    build?: string
+    commit?: string
+    at?: number
+    size?: { width: number; height: number }
+    scale?: number
+    frame?: HumanQueueImage
+  }
 }
 /**
- * A diagram's picture. bars: values to compare, the one the point is about lit; route: stages left to
- * right, each one or more alternatives, the option's own path lit; work: the minutes each side spends;
- * lines: short statements; risk: what could go wrong and the fallback if it does.
+ * What an argument rests on: a file's lines or a run's output this session saw, a screenshot it took or read (spec
+ * 176), the owner's words, or a stated estimate or assumption.
  */
-export type HumanQueueDiagramDraw =
-  | { shape: 'bars'; rows: { label: string; value: number; unit?: string; lit?: boolean }[] }
-  | { shape: 'route'; stages: { name: string; note?: string; lit?: boolean }[][] }
-  | { shape: 'work'; rows: { who: 'me' | 'you'; minutes: number; plus?: string }[] }
-  | { shape: 'lines'; lines: { text: string }[] }
-  | { shape: 'risk'; risks: { risk: string; why?: string; fallback: string }[] }
+export type HumanQueueRests = { kind: 'read' | 'run' | 'shot' | 'ruling' | 'estimate' | 'assumption'; ref?: string; excerpt?: string; shot?: HumanQueueShot }
+/** One supporting argument: its claim, what it rests on, and a picture where one carries it (an HTML fragment at the design width). */
+export type HumanQueueArgument = { claim: string; rests: HumanQueueRests; picture?: { html: string; height: number } }
+/** What the recommendation depends on: "This depends on {on}; choose {otherwise} instead if {if}", `otherwise` an option index. */
+export type HumanQueueDependsOn = { on: string; otherwise: number; if: string }
+/**
+ * One option's page (spec 171): what it is, its arguments strongest first, its risk and fallback, and why not. The
+ * recommended page carries what the call depends on and one line per other option (by index); another page one line
+ * on why it was not recommended.
+ */
+export type HumanQueueOptionPage = { what: string; arguments: HumanQueueArgument[]; risk: string; fallback?: string } & (
+  | { dependsOn: HumanQueueDependsOn; whyNot: { option: number; line: string }[] }
+  | { dependsOn?: undefined; whyNot: string }
+)
 /** The option tab the Decision pane shows, and the question it was picked on: another question opens on its recommendation. */
 export type HumanQueueDeckPage = { tab: number; ask: string }
+/**
+ * The shot the shot pane shows: the decision's question it belongs to, and its index among the decision's shots in
+ * Sources order, a pair's Before before its After. Null before one is opened.
+ */
+export type HumanQueueShotView = { ask: string; index: number } | null
 /** A successful GitHub observation and whether its latest refresh failed. Unknown is not zero. */
 export type HumanQueueCountObservation = { value: number | null; at: number | null; stale: boolean }
 
@@ -234,7 +270,7 @@ export type HumanQueueTask = { title: string; detail: string } | null
 export type HumanQueueStep = { text: string; status: 'pending' | 'in_progress' | 'completed' }
 
 /** A page of the palette specimen (`/vantage-point palette`): one element of the desktop's table each. */
-export type HumanQueuePalettePage = 'text' | 'type' | 'colour' | 'button' | 'field' | 'border' | 'hover' | 'svg' | 'rich' | 'pointer'
+export type HumanQueuePalettePage = 'text' | 'type' | 'colour' | 'button' | 'field' | 'border' | 'hover' | 'svg' | 'html' | 'rich' | 'pointer'
 
 /** The palette specimen's pane: its page, and what was last pressed, typed or picked in it. */
 export type HumanQueuePalette = { page: HumanQueuePalettePage; log: string[]; input: string; select: string }
@@ -445,6 +481,8 @@ declare module 'claude-code' {
       /** The session cards proposed in the turn the decision came from, and when it was made: starting one from its chip takes the step the decision recommends (#67). */
       decisionCards: { tasks: string[]; since: number }
       deckPage: HumanQueueDeckPage
+      /** The decision's shot the shot pane shows; null before ↗ opens one. */
+      shotView: HumanQueueShotView
       /** This session's subagents, kept after the engine drops them; [] before the first. */
       subagents: HumanQueueSubagent[]
       /** What the hooks saw of each subagent, by its id. */

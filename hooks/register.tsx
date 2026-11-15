@@ -12,9 +12,9 @@
 // its undo window has passed, and by nothing else: what that session leaves
 // unsent, or may have sent, waits in the pane for the person to press Send, Check and send, or Retry the label.
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderChildren, RenderElement, RenderInput, RenderSurface, TurnStepChunk, TurnStepResult } from 'claude-code'
+import type { ElementConstructor, EngineInterface, Register, RenderChildren, RenderElement, RenderInput, RenderSurface, SvgProps, TurnStepChunk, TurnStepResult } from 'claude-code'
 
-import type { HumanQueueBannerPlaced, HumanQueueEdited, HumanQueueGoverning, HumanQueueCache, HumanQueueFrontier, HumanQueueAgentNext, HumanQueueDeckPage, HumanQueueAgentBranch, HumanQueueAsk, HumanQueueDecision, HumanQueueReady, HumanQueueReading, HumanQueueReplyTicket, HumanQueueTask, HumanQueueTicketPage, HumanQueueTicketState, HumanQueueCapture, HumanQueueIssue, HumanQueueSubmission, HumanQueueUndo, HumanQueueView, HumanQueueComposedView, HumanQueueGrading, HumanQueueStep } from '../types'
+import type { HumanQueueBannerPlaced, HumanQueueEdited, HumanQueueGoverning, HumanQueueCache, HumanQueueFrontier, HumanQueueAgentNext, HumanQueueDeckPage, HumanQueueShotView, HumanQueueAgentBranch, HumanQueueAsk, HumanQueueArgument, HumanQueueDecision, HumanQueueOptionPage, HumanQueueReady, HumanQueueRests, HumanQueueReading, HumanQueueShot, HumanQueueReplyTicket, HumanQueueTask, HumanQueueTicketPage, HumanQueueTicketState, HumanQueueCapture, HumanQueueIssue, HumanQueueSubmission, HumanQueueUndo, HumanQueueView, HumanQueueComposedView, HumanQueueGrading, HumanQueueStep } from '../types'
 import { DESKTOP_CHARS_PER_CELL, shortTitle, titleRoom } from '../panes/band/title'
 import { PANEL, picture } from '../panes/reader/picture'
 import { SPEED_STEP } from '../panes/reader/reading'
@@ -119,19 +119,25 @@ import { FIRST_RUN, tour as drawTour, tourText, TOUR_STOPS, type TourKey, type T
 import { gradeCases, gradesMessage, type GradeCase } from '../panes/visuals/grading'
 import { composedCard } from './composed'
 import { plan as planOf, type ComposeItem, type Plan } from '../panes/visuals/compose'
-import { cardWidth } from '../panes/visuals/draw'
-import { sfWidth } from '../panes/svg'
-import { columnsOf, type Diagram, diagramPicture, pictureRoom, rowsOf, WIDE_ROOM, workScale } from '../panes/visuals/options'
+import { cardWidth, textWidth } from '../panes/visuals/draw'
+import { calloutAt, calloutMark, citationsOf, cropOutline, fileName, filesOf, GROUPS, plain, RING, rulingRef, SHOT_SHARE, shotLabel, shotLine, shotOf, shotSizes, tagLine, type CalloutMark, type ShotFile, type Source } from '../panes/visuals/cited'
+import { esc, sfWidth } from '../panes/svg'
+import { DESIGN_WIDTH as ARGUMENT_WIDTH, picture as argumentPicture } from '../panes/visuals/picture'
 import { access, composer } from '../panes/visuals/jev'
 import { composeItem, isShared, needsPlan, planKey, PROSE_OPENS_KEY, readSlot } from '../panes/visuals/plans'
 import type { PlanSlot } from '../panes/visuals/plans'
-import type { NativeCard } from './native-card'
-import { CARD_LINE, FILL, MERGED, PANE as GROUND, QUIET, RECOMMENDED, REST_LINE, SIGNAL_BLUE, SIGNAL_GOLD, SIGNAL_RED, SIGNAL_YELLOW, TEXT } from './signal'
+import type { NativeCard, NativeElements } from './native-card'
+import { CARD_LINE, DIM_TEXT, FILL, INACTIVE, MERGED, PANE as GROUND, QUIET, RECOMMENDED, REST_LINE, SIGNAL_BLUE, SIGNAL_GOLD, SIGNAL_RED, SIGNAL_YELLOW, TEXT } from './signal'
 import { CACHE_TONE, linkDesks, projectsRoot, scanCaches, scanDesktopSessions } from './caches'
 import type { CacheIO, SessionFiles } from './caches'
 import { cachesAt, facts as factsOf, hitLabel, isChild, isWarm, kindCounts, leftLabel, passes, RESPONSES_AWK, RESPONSES_SH, responsesOf, SHOW_ALL, stateOf, tokens, touch, treeOf } from '../panes/caches/caches'
 import type { CacheFilter, Seen } from '../panes/caches/caches'
-import { baseName, bashCandidates, dateArgv, hostOf, openArgv, removeArgv, resolveIn, shArgv, tailArgv } from '../panes/host'
+import { baseName, bashCandidates, browserCandidates, dateArgv, dirName, hostOf, makeDirArgv, openArgv, removeArgv, resolveIn, shArgv, tailArgv } from '../panes/host'
+import { checkOverflow } from './overflow'
+import { MIN_TEXT_PX } from '../panes/visuals/overflow'
+import type { OverflowIO } from './overflow'
+import { cropFile, shotEncoder } from './shots'
+import type { ShotIO } from './shots'
 import type { Host, HostEnv } from '../panes/host'
 import { sessionLink, sessionOf, transcriptId } from '../panes/caches/sessions'
 import { afterTurn, missedCache, PING, pingAt, readWarmth, toggled, UNARMED, warmFact, WARMTH_PREFIX, warmStateOf, warmthKey } from '../panes/caches/warm'
@@ -140,8 +146,8 @@ import { CONTEXT_HIGH, contextLabel } from '../panes/caches/context'
 import { freshBrief, handbackOf, isHandbackOf } from '../panes/human-queue/handback'
 import { screenSvg } from './screen'
 import { refusal } from './refusal'
-import { fetchOf, legible, loadedFrom, nameOf, NOT_A_FILM, pictureRun, pictureSvg, picturesOf, playLabel, SIZE, sizeFrom, stripsOf, TREE_PICTURES, videoArgv, videoOf, withoutPictures } from '../panes/human-queue/pictures'
-import type { Loaded, Picture, Strip, Video } from '../panes/human-queue/pictures'
+import { fetchOf, fit, legible, loadedFrom, nameOf, NOT_A_FILM, pictureRun, pictureSvg, picturesOf, SVG_MAX, playLabel, SIZE, sizeFrom, stripsOf, TREE_PICTURES, videoArgv, videoOf, withoutPictures } from '../panes/human-queue/pictures'
+import type { Fetch, Loaded, Picture, Strip, Video } from '../panes/human-queue/pictures'
 import type { Screen, ScreenRequest } from './screen'
 
 type $ = EngineInterface
@@ -155,8 +161,55 @@ const TICKET_PANE = 'human-queue-ticket'
 const TASK_PANE = 'human-queue-task'
 /** The pane a declared decision opens in: the grid under the reply row. */
 const DECISION_PANE = 'human-queue-decision'
+/** The pane one of the decision's shots opens in, beside the Decision tab, titled by its file (spec 176). */
+const SHOT_PANE = 'vantage-point-shot'
 /** A Decision pane column in points, the card lab's measure: 128 columns drew a 1129pt body and 31 a 274pt one (desktop, 2026-11-02, #134). */
 const DECK_COLUMN_PT = 8.8
+/** A `columnGap` of 1 in points (docs/palette.md, measured off EXP-023). */
+const DECK_GAP_PT = 9.5
+/** The cells an argument's numeral column holds, "1." to "4.", so its claim's text edge sits at a known indent. */
+const NUMERAL_CELLS = 2
+/** How far an argument's claim, and the picture under it, sit in from the page's edge, in pixels. */
+const CLAIM_INDENT_PX = Math.ceil(NUMERAL_CELLS * DECK_COLUMN_PT + DECK_GAP_PT)
+/** The cells a source's number holds in the Sources tab, "S1" to "S99", and how far its lines sit in, in pixels. */
+const SOURCE_CELLS = 3
+const SOURCE_INDENT_PX = Math.ceil(SOURCE_CELLS * DECK_COLUMN_PT + DECK_GAP_PT)
+// A source tag's box hugs its number: a caption's size (0.84 of the pane's 13px, docs/palette.md), its line, the
+// baseline in that line, and the padding around it.
+const TAG_FONT_PX = 11
+const TAG_LINE_PX = 13
+const TAG_BASELINE_PX = 10
+const TAG_PAD_Y_PX = 2
+const TAG_PAD_X_PX = 5
+// A shot's dim label is drawn in its own Svg, a caption's line over the frame with no gap: a caption in a Box of its
+// own took a body line and left a gap under it (the design review, 2026-11-15).
+const SHOT_LABEL_PX = 15
+const SHOT_LABEL_BASELINE_PX = 11
+
+/**
+ * The expand glyph, alone in its Button under every picture and shot: the standard full-screen mark (the owner, 0.282.0).
+ * The app's font has no ⛶ or ⤢ of its own; ⛶ falls back to STIX Two Math at about 10.6 by 16pt at 13pt, larger than ↗,
+ * where ⤢ fell back to Apple Symbols, thin and about 7pt wide (docs/palette.md, Button).
+ */
+const EXPAND = '⛶'
+
+/**
+ * A 1px frame in the pane's rest line round a shot drawn `size`, so a shot of the pane reads as a picture and not as the
+ * pane itself. `top` is where a strip starts in a picture drawn as strips: each strip's Svg clips the rest away.
+ */
+const framedSvg = (size: { width: number; height: number }, top = 0) =>
+  `<rect x="0.5" y="${0.5 - top}" width="${size.width - 1}" height="${size.height - 1}" fill="none" stroke="${REST_LINE}" shape-rendering="crispEdges"/>`
+
+/** A callout's numbered ring and its leader, haloed in the pane's ground so they read over any shot; `top` as `framedSvg`'s. */
+const ringSvg = (mark: CalloutMark, top = 0) => {
+  const { leader, ring } = mark
+  const line = `x1="${leader.x1}" y1="${leader.y1 - top}" x2="${leader.x2}" y2="${leader.y2 - top}"`
+  return `<line ${line} stroke="${GROUND}" stroke-width="4" stroke-linecap="round"/>` +
+    `<line ${line} stroke="${TEXT}" stroke-width="1.5" stroke-linecap="round"/>` +
+    `<circle cx="${ring.x}" cy="${ring.y - top}" r="${RING.r}" fill="${GROUND}" stroke="${TEXT}" stroke-width="2"/>` +
+    `<text x="${ring.x}" y="${ring.y - top + 4}" text-anchor="middle" font-family="-apple-system, system-ui, sans-serif" font-size="12" font-weight="600" fill="${TEXT}">1</text>`
+}
+
 const FRONTIER_PANE = 'human-queue-frontier'
 /** The agent's zoom-out: every issue ready for an agent, by repo. */
 /** The palette specimen (docs/palette.md), behind `/vantage-point palette` and nowhere else. */
@@ -294,6 +347,8 @@ const decision = atom({ plugin: 'vantage-point', key: 'decision' } as const, nul
 const decisionCards = atom({ plugin: 'vantage-point', key: 'decisionCards' } as const, { tasks: [] as string[], since: 0 })
 /** Which deck page shows, and the source a citation opened. */
 const deckPage = atom({ plugin: 'vantage-point', key: 'deckPage' } as const, { tab: 0, ask: '' } as HumanQueueDeckPage)
+/** Which of the decision's shots the shot pane shows. */
+const shotView = atom({ plugin: 'vantage-point', key: 'shotView' } as const, null as HumanQueueShotView)
 /** The quote a source chip opened under its sentence, as `field-sentence-source` (#108); null, none. */
 /** Tickets the last reply names, their cards, and which rows the Tickets page has open. Cleared with the decision. */
 const replyTickets = atom({ plugin: 'vantage-point', key: 'replyTickets' } as const, [] as HumanQueueReplyTicket[])
@@ -364,6 +419,9 @@ let commentFolded = false
 const pictures = new Map<string, Loaded | 'failed' | 'pending' | 'too large'>()
 // Each picture's size, by link, read before its strips are cut (#136).
 const pictureSizes = new Map<string, { file: string; width: number; height: number } | 'failed' | 'pending'>()
+// Each shot's crop as its own file, by file and crop, for the Decision pane's full view: the part on disk and the
+// file's size, failed, or still cutting (spec 176).
+const crops = new Map<string, { part: string; size: { width: number; height: number } } | 'failed' | 'pending'>()
 // The videos asks embed, by link: fetched to disk, failed, or still fetching (#132).
 // 'image' is a bare attachment link the fetch found to be a picture (#135).
 const videos = new Map<string, Video | 'failed' | 'pending' | 'image'>()
@@ -434,6 +492,7 @@ async function clearDecision($: $, why: string): Promise<void> {
   // The next decision opens on its recommendation, even one that asks the same question.
   await update($, deckPage, () => ({ tab: 0, ask: '' }))
   await update($, decisionCards, () => ({ tasks: [], since: 0 }))
+  await retitleShot($).catch(() => undefined)
   await update($, replyTickets, () => [])
 }
 
@@ -817,18 +876,24 @@ async function openFrontier($: $, scope: 'here' | 'all' = 'here'): Promise<void>
 /** Which Git for Windows bash each list of candidates found, so the disk is asked once per list. */
 const bashFound = new Map<string, Promise<string | null>>()
 
-/** The system this runs on (issue 152): its environment, and on Windows which Git for Windows bash is there. */
-async function host($: $): Promise<Host> {
+/** The environment variables the host reads, each fetched by its literal name (issue 152). */
+async function hostEnv($: $): Promise<HostEnv> {
   const get = (value: string | undefined) => (typeof value === 'string' && value !== '' ? value : undefined)
-  const env: HostEnv = {
+  return {
     OS: get(await $.env.get('OS').catch(() => undefined)),
     HOME: get(await $.env.get('HOME').catch(() => undefined)), // host-boundary: the host's own read
     USERPROFILE: get(await $.env.get('USERPROFILE').catch(() => undefined)),
     APPDATA: get(await $.env.get('APPDATA').catch(() => undefined)),
     LOCALAPPDATA: get(await $.env.get('LOCALAPPDATA').catch(() => undefined)),
     ProgramFiles: get(await $.env.get('ProgramFiles').catch(() => undefined)),
+    'ProgramFiles(x86)': get(await $.env.get('ProgramFiles(x86)').catch(() => undefined)),
     CLAUDE_CODE_GIT_BASH_PATH: get(await $.env.get('CLAUDE_CODE_GIT_BASH_PATH').catch(() => undefined)),
   }
+}
+
+/** The system this runs on (issue 152): its environment, and on Windows which Git for Windows bash is there. */
+async function host($: $): Promise<Host> {
+  const env = await hostEnv($)
   const candidates = bashCandidates(env)
   if (candidates.length === 0) return hostOf(env)
   const key = candidates.join('\n')
@@ -841,6 +906,51 @@ async function host($: $): Promise<Host> {
     bashFound.set(key, found)
   }
   return hostOf(env, await found)
+}
+
+/** Each argument picture of `decision` laid out in a headless browser at once (issue 175): the ones that overflow, leave a blank under their content or draw text under the floor (spec 176), by path. */
+async function overflowing($: $, decision: HumanQueueDecision): Promise<{ over: string[]; unchecked: string[] }> {
+  const system = await host($)
+  const setup = { host: system, browsers: browserCandidates(await hostEnv($)) }
+  const io: OverflowIO = {
+    run: (argv, init) => $.process.run(argv, init),
+    exists: path => $.fs.exists(path),
+    write: async (path, text) => {
+      await $.process.run(makeDirArgv(system, dirName(path)), { timeoutMs: 5000 }).catch(() => undefined)
+      await $.fs.write(path, text)
+    },
+    nonce: () => crypto.randomUUID().replace(/-/g, ''),
+    sleep: ms => $.clock.sleep(ms),
+  }
+  const pictures = (decision.pages ?? []).flatMap((page, i) =>
+    page.arguments.flatMap((argument, n) => (argument.picture === undefined ? [] : [{ path: `pages["${decision.options[i]}"].arguments[${n}].picture`, spec: argument.picture }])),
+  )
+  // Four seconds each, all at once, so the check stays inside the hook's ten.
+  const measured = await Promise.all(pictures.map(async one => ({ ...one, result: await checkOverflow(io, setup, one.spec, { deadlineMs: 4000 }) })))
+  return {
+    over: measured.flatMap(({ path, spec, result }) => [
+      ...(result.status === 'overflows'
+        ? [`${path}: its content runs ${result.by}px past its height of ${spec.height}; state a height of at least ${spec.height + result.by}, or cut the picture`]
+        : result.status === 'underfills'
+          ? [`${path}: its content ends ${result.by}px above its height of ${spec.height}; state a height of ${result.content}`]
+          : []),
+      ...(result.status !== 'unchecked' && result.smallest !== null && result.smallest < MIN_TEXT_PX
+        ? [`${path}: its smallest text is ${result.smallest}px at ${ARGUMENT_WIDTH} wide, under the ${MIN_TEXT_PX}px floor; set every label at ${MIN_TEXT_PX}px or more`]
+        : []),
+    ]),
+    // A check that cannot run is said so in the reply (spec 171), never passed in silence.
+    unchecked: measured.flatMap(({ path, result }) => (result.status === 'unchecked' ? [`${path} (${result.why})`] : [])),
+  }
+}
+
+/** What the shot encoder needs (spec 176): runs, a file's modified time, reads, and the clock's sleep. */
+function shotIO($: $): ShotIO {
+  return {
+    run: (argv, init) => $.process.run(argv, init),
+    mtime: path => $.fs.stat(path, { resolve: true }).then(stat => (stat.kind === 'file' ? stat.mtimeMs : null), () => null),
+    read: path => $.fs.read(path).then(body => (typeof body === 'string' ? body : null), () => null),
+    sleep: ms => $.clock.sleep(ms),
+  }
 }
 
 /** Opens a file or link the way a double click does, on either system. */
@@ -1649,45 +1759,73 @@ function picturesFor(request: Request, item: Item | undefined): Picture[] {
   return all.filter((one, i) => all.findIndex(other => other.url === one.url) === i)
 }
 
-/** One picture's size, starting its fetch the first time it is asked for (#136). */
-function pictureSize($: $, url: string, root: string): { file: string; width: number; height: number } | 'failed' | 'pending' {
-  const held = pictureSizes.get(url)
-  if (held !== undefined) return held
+/**
+ * How a picture at `url` is fetched, and the name its cached copy goes by: a file fetched `wide` (a 2x shot's whole
+ * frame, spec 176) is a copy of its own, cached apart from the same file at the fetcher's own cap.
+ */
+function fetchFor(url: string, root: string, wide?: number): { fetch: Fetch; name: string } | null {
   const fetch = fetchOf(url, root)
-  if (fetch === null) {
-    pictureSizes.set(url, 'failed')
+  if (fetch === null) return null
+  if (wide === undefined || fetch.kind !== 'file') return { fetch, name: nameOf(url) }
+  return { fetch: { ...fetch, wide }, name: nameOf(`${url}@${wide}`) }
+}
+
+/** One picture's size, starting its fetch the first time it is asked for (#136); `wide`, the most pixels across its copy keeps. */
+function pictureSize($: $, url: string, root: string, wide?: number): { file: string; width: number; height: number } | 'failed' | 'pending' {
+  const key = wide === undefined ? url : `${url}@${wide}`
+  const held = pictureSizes.get(key)
+  if (held !== undefined) return held
+  const how = fetchFor(url, root, wide)
+  if (how === null) {
+    pictureSizes.set(key, 'failed')
     return 'failed'
   }
-  pictureSizes.set(url, 'pending')
+  pictureSizes.set(key, 'pending')
   void host($)
     .then(async h => {
-      const run = pictureRun(h, nameOf(url), fetch, SIZE)
+      const run = pictureRun(h, how.name, how.fetch, SIZE)
       if (typeof run === 'string') return null
       const ran = await $.process.run(run.argv, { timeoutMs: 45_000 })
       return ran.exitCode === 0 ? sizeFrom(run, ran.stdout) : null
     })
     .catch(() => null)
     .then(size => {
-      pictureSizes.set(url, size ?? 'failed')
+      pictureSizes.set(key, size ?? 'failed')
+      $.ui.invalidate('ui.render')
+    })
+  return 'pending'
+}
+
+/** A shot's crop cut to a file of its own, starting the cut the first time it is asked for (spec 176). */
+function cropState($: $, file: string, crop: { x: number; y: number; w: number; h: number }): { part: string; size: { width: number; height: number } } | 'failed' | 'pending' {
+  const key = `${file}\n${crop.x},${crop.y},${crop.w},${crop.h}`
+  const held = crops.get(key)
+  if (held !== undefined) return held
+  crops.set(key, 'pending')
+  void host($)
+    .then(h => cropFile(shotIO($), h, file, crop))
+    .catch(() => null)
+    .then(cut => {
+      crops.set(key, cut ?? 'failed')
       $.ui.invalidate('ui.render')
     })
   return 'pending'
 }
 
 /** One strip of a picture as the card holds it, starting its fetch the first time it is asked for. */
-function pictureOf($: $, url: string, root: string, page: Strip): Loaded | 'failed' | 'pending' | 'too large' {
-  const key = `${url}@${page.top}-${page.rows}-${page.most}`
+function pictureOf($: $, url: string, root: string, page: Strip, wide?: number): Loaded | 'failed' | 'pending' | 'too large' {
+  const key = `${url}@${page.top}-${page.rows}-${page.most}${wide === undefined ? '' : `@${wide}`}`
   const held = pictures.get(key)
   if (held !== undefined) return held
-  const fetch = fetchOf(url, root)
-  if (fetch === null) {
+  const how = fetchFor(url, root, wide)
+  if (how === null) {
     pictures.set(key, 'failed')
     return 'failed'
   }
   pictures.set(key, 'pending')
   void host($)
     .then(async h => {
-      const run = pictureRun(h, nameOf(url), fetch, page)
+      const run = pictureRun(h, how.name, how.fetch, page)
       if (typeof run === 'string') return run
       const ran = await $.process.run(run.argv, { timeoutMs: 45_000 })
       // Without sips a picture is never shrunk, so one past its budget opens instead of drawing (issue 152).
@@ -1699,6 +1837,98 @@ function pictureOf($: $, url: string, root: string, page: Strip): Loaded | 'fail
       $.ui.invalidate('ui.render')
     })
   return 'pending'
+}
+
+/** A picture drawn as strips, each its own copy: its width, its height, and each strip's Svg. */
+type Stripped = { width: number; height: number; strips: { source: string; width: number; height: number }[] }
+
+/**
+ * A picture at `url` drawn to fit `frame` across and `high` down, never so small its type cannot be read (`legible`),
+ * as strips stacked with no gap, each its own copy, together within `share` of the tree's picture budget, so its type
+ * stays sharp where one squeezed copy blurred (#136); to the eye it is one image the pane scrolls by (ADR 0049). The
+ * queue card and the Decision pane draw every picture and full view through it. `overlay`, given a strip's top in the
+ * drawn picture and the scale from the file's pixels, draws over that strip in its own Svg (a shot's crop, spec 176).
+ * `points` is the most it draws across, never past its fetched pixels: a 2x shot's size in points. `wide` is the most
+ * pixels across its copy keeps, past the fetcher's 1280, as `pictureSize` was asked.
+ */
+function strippedPicture(
+  $: $, url: string, root: string, size: { width: number; height: number }, frame: number, high: number, share: number,
+  overlay?: (top: number, scale: number) => string, points = Infinity, wide?: number,
+): Stripped | 'failed' | 'pending' | 'too large' {
+  // `points` caps how wide it draws, a 2x shot's true size, so its pixels draw two to a point (spec 176).
+  const natural = Math.min(size.width, points)
+  const across = legible(natural, (size.height * natural) / size.width, frame, high).width
+  const plan = stripsOf(size.width, size.height, across, share)
+  const loaded = plan.map(one => ({ one, state: pictureOf($, url, root, one.strip, wide) }))
+  if (loaded.some(one => one.state === 'failed')) return 'failed'
+  if (loaded.some(one => one.state === 'too large')) return 'too large'
+  if (loaded.some(one => one.state === 'pending')) return 'pending'
+  let top = 0
+  const strips = loaded.map(({ one, state }) => {
+    const source = pictureSvg((state as Loaded).base64, one.width, one.height, overlay?.(top, across / size.width) ?? '')
+    top += one.height
+    return { source, width: one.width, height: one.height }
+  })
+  if (strips.some(one => one.source === null)) return 'too large'
+  return { width: across, height: top, strips: strips as Stripped['strips'] }
+}
+
+/** The height a full view gives a picture: the pane's rows less its nav row and a margin, at 19pt a row. */
+const fullPictureTall = (paneRows: number) => Math.max(8, paneRows - 4) * 19
+
+/**
+ * A picture at full size (#102, #136): ← back to where the person was (`back`), ◀ ▶ through its set with "N of M",
+ * and the picture's strips. The queue card's full view, given the pane, and the shot pane's (spec 176), a tab of its
+ * own with no ←, where a shot leads with its crop (`crop`) over the whole frame, and Open hands its file to the
+ * system's viewer (`open`).
+ */
+function fullPictureView(
+  { Box, Text, Button, Svg }: NativeElements & { Svg: ElementConstructor<SvgProps> },
+  state: Stripped | 'failed' | 'pending' | 'too large',
+  alt: string,
+  open: number,
+  of: number,
+  go: (index: number) => void,
+  shot: { back?: () => void; crop?: Stripped | 'pending' | 'too large'; label?: string; open?: () => void; note?: { text: string; caption: { size?: 'caption' } } } = {},
+) {
+  const step = (by: number) => () => go((open + by + of) % of)
+  const note = (id: string) => (shot.note === undefined ? null : <Box key={`${id}-callout`}><Text dimColor wrap="wrap" {...shot.note.caption}>{shot.note.text}</Text></Box>)
+  const drawn = (id: string, one: Stripped | 'failed' | 'pending' | 'too large', label: string) =>
+    typeof one === 'string' ? (
+      <Text key={`${id}-state`} dimColor wrap="wrap">
+        {one === 'pending' ? 'Loading the picture…' : one === 'failed' ? 'The picture could not load.' : 'The picture is too large to draw here.'}
+      </Text>
+    ) : (
+      <Box key={id === 'full' ? 'full-svg' : id} flexDirection="column">
+        {one.strips.map((strip, k) => (
+          <Box key={`${id}-strip-${k}`}>
+            <Svg source={strip.source} alt={k === 0 ? label : ''} width={strip.width} height={strip.height} />
+          </Box>
+        ))}
+      </Box>
+    )
+  return (
+    <Box key="full-picture" flexDirection="column" flexShrink={0} gap={1}>
+      <Box key="full-nav" flexDirection="row" columnGap={1} alignItems="center">
+        {shot.back === undefined ? null : <Button key="full-back" label="←" onPress={shot.back} />}
+        {of > 1 ? <Button key="full-prev" label="◀" onPress={step(-1)} /> : null}
+        {of > 1 ? <Button key="full-next" label="▶" onPress={step(1)} /> : null}
+        <Text key="full-of" dimColor>
+          {of > 1 ? `${open + 1} of ${of}` : ''}
+        </Text>
+        {shot.open === undefined ? null : <Button key="full-open" label="Open" onPress={shot.open} />}
+      </Box>
+      {/* Which shot this is, as the page labels it, so a Before reads as a Before (the design review). */}
+      {shot.label === undefined ? null : <Box key="full-label"><Text dimColor wrap="wrap">{shot.label}</Text></Box>}
+      {/* The callout's name under the picture its ring is on, as the page names it (the design review of 0.282.0). */}
+      {shot.crop === undefined ? [drawn('full', state, alt), note('full')] : [
+        drawn('full-crop', shot.crop, alt),
+        note('full-crop'),
+        <Box key="full-frame-caption"><Text dimColor wrap="wrap">Whole frame</Text></Box>,
+        drawn('full', state, `The whole frame of ${alt}`),
+      ]}
+    </Box>
+  )
 }
 
 /** One video as the card holds it, starting its fetch the first time it is asked for (#132). */
@@ -2790,6 +3020,20 @@ const declareFirst = (asked: WrapUpAsk) =>
 const askOf = (asked: HumanQueueDecision): WrapUpAsk => ({ ask: asked.ask, actions: asked.options, sends: asked.sends ?? asked.options })
 /** The decision the agent declared this turn through the decide tool; null when it declared none (issue 167). */
 let declaredThisTurn: HumanQueueDecision | null = null
+/**
+ * The declaration also waits in the plugin's store, by session: a release landed mid-turn reloads the mod as the turn
+ * ends, and the reloaded mod, its memory empty, showed nothing (0.282.0 and 0.286.0 each dropped one).
+ */
+const declaredKey = async ($: $) => `declared-${await $.session.id().catch(() => '?')}`
+async function keepDeclared($: $, held: HumanQueueDecision | null): Promise<void> {
+  declaredThisTurn = held
+  await $.store.set(await declaredKey($), held).catch(() => undefined)
+}
+async function takeDeclared($: $): Promise<HumanQueueDecision | null> {
+  if (declaredThisTurn !== null) return declaredThisTurn
+  const stored = await $.store.get(await declaredKey($)).catch(() => null)
+  return stored !== null && typeof stored === 'object' && Array.isArray((stored as HumanQueueDecision).options) ? stored as HumanQueueDecision : null
+}
 /** Whether this turn's wrap-up question was already sent back once for its declaration (issue 167). */
 let declareAskedThisTurn = false
 /** The session cards the running turn's `start_session` calls proposed (#67). */
@@ -2801,6 +3045,72 @@ async function fillStopped($: $, stage: string, detail = ''): Promise<void> {
   const held = await $.store.get(DECK_FILLS_KEY).catch(() => null)
   const kept = Array.isArray(held) ? held.slice(-29) : []
   await $.store.set(DECK_FILLS_KEY, [...kept, { at: await $.clock.now(), stage, detail: detail.slice(0, 300) }]).catch(() => undefined)
+}
+
+/** What a decision's pages hold, in a line for the fill log: each page's argument count and its pictures. */
+const pagesLine = (held: HumanQueueDecision) =>
+  `pages: ${(held.pages ?? []).map(page => `${page.arguments.length} arguments, ${page.arguments.filter(one => one.picture !== undefined).length} pictures`).join(' | ') || 'none'}`
+
+/** A new decision on the row: the Decision pane starts at its top (spec 171). */
+async function newDecision($: $, held: HumanQueueDecision): Promise<void> {
+  await update($, decision, () => held)
+  await deckToTop($)
+  await retitleShot($).catch(() => undefined)
+}
+
+/** Scrolls the Decision pane to its top: a new decision and a tab press each start there (spec 171). */
+const deckToTop = ($: $) => $.ui.scroll({ in: DECISION_PANE, to: 'start' }).then(() => undefined, () => undefined)
+
+/** A decision's option pages; none for one held across a release from before pages, which draws as one with none. */
+const deckPagesOf = (held: HumanQueueDecision) =>
+  held.pages?.length === held.options.length && held.pages.every(page => Array.isArray(page?.arguments)) ? held.pages : undefined
+
+/** The option tabs in order: the recommended one first, then the rest as declared. */
+const rankedOf = (held: HumanQueueDecision) => [held.recommend, ...held.options.map((_, i) => i).filter(i => i !== held.recommend)]
+
+/** One file of a decision's shots as the shot pane shows it, with the number of the source that cites it; an After keeps its callout. */
+type DeckShot = Pick<ShotFile, 'file' | 'crop' | 'size' | 'scale'> & Pick<HumanQueueShot, 'callout'> & { source: number; alt: string; label: string }
+
+/** Every file the decision's shots draw, in Sources order, a pair's Before ahead of its After (spec 176). */
+function deckShotsOf(held: HumanQueueDecision): DeckShot[] {
+  const pages = deckPagesOf(held)
+  if (pages === undefined) return []
+  return citationsOf(pages, rankedOf(held)).sources.flatMap(source => {
+    const shot = source.rests.kind === 'shot' ? source.rests.shot : undefined
+    return shot === undefined ? [] : filesOf(shot).map(({ which, one }) => ({
+      source: source.n, file: one.file, alt: which === 'Before' ? `${source.claim}, before` : source.claim, label: shotLabel(one, which),
+      ...(one.crop ? { crop: one.crop } : {}), ...(one.size ? { size: one.size } : {}), ...(one.scale ? { scale: one.scale } : {}),
+      ...(which !== 'Before' && shot.callout ? { callout: shot.callout } : {}),
+    }))
+  })
+}
+
+/**
+ * Opens the decision's shot at `index` in the shot pane, a tab of its own beside the Decision tab, titled by its
+ * file (the owner, 2026-11-14: "could we just open up another tab when clicking on an image?"); ◀ ▶ there step
+ * through the rest and retitle it without moving the focus.
+ */
+async function openShot($: $, held: HumanQueueDecision, index: number, focus = true): Promise<void> {
+  const one = deckShotsOf(held)[index]
+  if (one === undefined) return
+  await update($, shotView, () => ({ ask: held.ask, index }))
+  await $.ui.open({ id: SHOT_PANE, title: fileName(one.file), ...(focus ? { focus: true } : {}) })
+}
+
+/**
+ * Keeps an open shot pane's title to the shot it shows once the decision under it changes: the same question decided
+ * again may show another file at its index, or none ("Shot"). Retitled once and with no focus, as the engine's record of the
+ * pane says it differs, so the tab the person is on stays theirs and a closed pane stays closed (the design review of
+ * 0.282.0: the tab kept its first file's name). A render may not write or open, so this runs where the decision is set.
+ */
+async function retitleShot($: $): Promise<void> {
+  const pane = (await $.ui.panes().catch(() => [])).find(one => one.id === SHOT_PANE)
+  if (pane === undefined) return
+  const held = await read($, decision)
+  const at = await read($, shotView)
+  const one = held !== null && at !== null && at.ask === held.ask ? deckShotsOf(held)[at.index] : undefined
+  const title = one === undefined ? 'Shot' : fileName(one.file)
+  if (pane.title !== title) await $.ui.open({ id: SHOT_PANE, title })
 }
 
 /** An asked question's fill stopped: its pane says so rather than sit blank (#160). */
@@ -2851,9 +3161,9 @@ async function showDeclared($: $, declaredHere: HumanQueueDecision, wrap: WrapUp
   if (epoch !== deckEpoch) return fillStopped($, 'stale', 'a new turn started before the decision showed')
   const shown = parsed
   const sends = optionSends(shown.options, wrap)
-  await update($, decision, () => ({ ...shown, sends }))
+  await newDecision($, { ...shown, sends })
   await update($, deckPage, () => ({ tab: shown.recommend, ask: shown.ask }))
-  void fillStopped($, 'shown', `pages: ${(shown.pages ?? []).map(page => page?.diagrams.map(one => one.draw.shape).join(' ') ?? 'none').join(' | ')}`)
+  void fillStopped($, 'shown', pagesLine(shown))
   const since = await $.clock.now()
   await update($, decisionCards, () => ({ tasks: [...cards], since }))
   // The recommended option waits in the empty prompt box as a dim suggestion, Tab to take.
@@ -3129,11 +3439,9 @@ export const register: Register = (on, _options) => {
           ask: { type: 'string' },
           options: { type: 'array', items: { type: 'string' } },
           recommend: { type: 'string' },
-          dimensions: { type: 'array', items: { type: 'string' } },
-          cells: { type: 'array', items: { type: 'object' } },
           pages: { type: 'array', items: { type: 'object' } },
         },
-        required: ['headline', 'ask', 'options', 'recommend', 'dimensions', 'cells', 'pages'],
+        required: ['headline', 'ask', 'options', 'recommend', 'pages'],
       },
     })
     // The tool each update_plan call is renamed to in the stream (issue 104): the same input, the app's reply.
@@ -3262,8 +3570,9 @@ export const register: Register = (on, _options) => {
       const cards = turnCards
       const asked = askedThisTurn
       const permission = permissionThisTurn
-      const declaredHere = declaredThisTurn
       void (async () => {
+        const declaredHere = await takeDeclared($)
+        await keepDeclared($, null)
         if (permission) return
         // No declaration, no pages: a question asked on the row keeps its buttons, and nothing is guessed from the reply.
         if (declaredHere === null) return fillStopped($, 'none', asked === null ? 'no question' : 'asked, not declared')
@@ -3289,7 +3598,7 @@ export const register: Register = (on, _options) => {
 
   on('turn.step', async function* ($, e, next) {
     const arm = async (asked: HumanQueueDecision) => {
-      await update($, decision, () => asked)
+      await newDecision($, asked)
       askedThisTurn = askOf(asked)
     }
     // Where the band draws the task list, the app must not: every update_plan call is renamed in the stream (issue 104).
@@ -3401,7 +3710,7 @@ export const register: Register = (on, _options) => {
     }
     deckEpoch += 1
     askedThisTurn = null
-    declaredThisTurn = null
+    await keepDeclared($, null)
     declareAskedThisTurn = false
     permissionThisTurn = false
     turnCards = []
@@ -3468,7 +3777,7 @@ export const register: Register = (on, _options) => {
       await logAsk($, 'dialog', 'not a question with 2-4 options')
       return next(e)
     }
-    await update($, decision, () => asked)
+    await newDecision($, asked)
     askedThisTurn = askOf(asked)
     await logAsk($, 'row')
     return { deny: ON_ROW }
@@ -3476,7 +3785,7 @@ export const register: Register = (on, _options) => {
     if (next.called) return next(e)
     const asked = e.agentId === undefined ? decisionOfQuestions((e as unknown as { questions?: unknown }).questions) : null
     if (asked === null) return next(e)
-    const armed = await update($, decision, () => asked).then(() => true, () => false)
+    const armed = await newDecision($, asked).then(() => true, () => false)
     askedThisTurn = askOf(asked)
     await logAsk($, 'failed', `${next.error.kind}${next.error.message === undefined ? '' : `: ${next.error.message}`}${armed ? '' : ', row not armed'}`)
     return { deny: armed ? ON_ROW : IN_PROSE }
@@ -3496,7 +3805,7 @@ export const register: Register = (on, _options) => {
     if (!(await onPhone($))) return verdict
     if (allowedOnce.delete(callKey(e.tool, e.input))) return { decision: 'allow', reason: 'The person allowed this call on the reply row.' }
     const asked = decisionOfPermission(e.tool, e.input)
-    await update($, decision, () => asked)
+    await newDecision($, asked)
     permissionThisTurn = true
     await logAsk($, 'row', `permission: ${e.tool}`)
     return { decision: 'deny', reason: WAIT_ON_ROW }
@@ -3518,7 +3827,7 @@ export const register: Register = (on, _options) => {
       return { deny: declareFirst(question) }
     }
     if (asked === null) return next(e)
-    await update($, decision, () => asked)
+    await newDecision($, asked)
     askedThisTurn = askOf(asked)
     const { ask: _ask, actions: _actions, blocked: _blocked, ...recap } = input
     return next(recap as unknown as typeof e)
@@ -3569,15 +3878,30 @@ export const register: Register = (on, _options) => {
   on('tool.call', { tool: DECIDE_TOOL as typeof TOOL }, async ($, e) => {
     if (e.agentId !== undefined) return { deny: 'Only the session\'s own agent declares a decision; a subagent reports to it instead.' }
     const { tool: _tool, tool_use_id: _id, agentId: _agent, ...input } = e as unknown as Record<string, unknown>
-    const checked = declared(input)
+    // Each argument's source is checked against what this session read and ran, the files as they read now (spec 171).
+    const messages = await $.session.messages().catch(() => [])
+    const cwd = await $.session.cwd()
+    const readFile = async (path: string) => {
+      const body = await $.fs.read(resolveIn(cwd, path)).catch(() => null)
+      return typeof body === 'string' ? body : null
+    }
+    // A shot source is cut and encoded here, every shot at once, inside the hook's ten seconds (spec 176).
+    const checked = await declared(input, messages, readFile, { cwd, encode: shotEncoder(shotIO($), await host($)) })
     if ('refused' in checked) {
       await fillStopped($, 'refused', checked.refused.join('; '))
       return { deny: `Not shown. Fix these and call decide again:\n${checked.refused.map(one => `- ${one}`).join('\n')}` }
     }
-    declaredThisTurn = checked.decision
-    void fillStopped($, 'declared', `pages: ${(checked.decision.pages ?? []).map(page => page?.diagrams.map(one => one.draw.shape).join(' ') ?? 'none').join(' | ')}`)
-    const cut = checked.cut.length === 0 ? '' : ` Cut to fit: ${checked.cut.join(', ')}.`
-    return { result: `The Decision pane shows it when your turn ends.${cut} Ask your question as usual.` }
+    // A picture whose content runs past its stated height is refused once a browser has laid it out (issue 175);
+    // a check that cannot run lets the picture through, since the pane draws it at its stated size either way.
+    const { over, unchecked } = await overflowing($, checked.decision)
+    if (over.length > 0) {
+      await fillStopped($, 'refused', over.join('; '))
+      return { deny: `Not shown. Fix these and call decide again:\n${over.map(one => `- ${one}`).join('\n')}` }
+    }
+    await keepDeclared($, checked.decision)
+    void fillStopped($, 'declared', pagesLine(checked.decision))
+    const skipped = unchecked.length === 0 ? '' : ` Not checked for overflow, so drawn at the height you stated: ${unchecked.join('; ')}.`
+    return { result: `The Decision pane shows it when your turn ends. Ask your question in a sentence; the pane holds the case.${skipped}` }
   })
 
   on('tool.call', { tool: TASK_TOOL as typeof TOOL }, async ($, e) => {
@@ -4445,7 +4769,7 @@ export const register: Register = (on, _options) => {
         },
       },
       { pointer: null as unknown as RenderElement, inner: [], fault: null as unknown as RenderElement },
-      { version, newProps: takesNewProps(base) },
+      { version, newProps: takesNewProps(base), room: cardWidth(e.props.bodyColumns) },
     )
   })
 
@@ -4779,8 +5103,10 @@ export const register: Register = (on, _options) => {
     )
   })
 
-  // The decision deck the reply row opens (#134): a tab per option, the recommended one first to show, each one page
-  // that scrolls (issue 167): what the option is, the diagrams that make its case, then Choose this. Tickets keep a tab.
+  // The Decision pane the reply row opens (spec 171, ADR 0054): the question, a tab per option with the recommended one
+  // first and open, and the selected option's checked case in native elements as a report (spec 176): each argument's
+  // exhibit under its claim, then the risk, why not and Choose this. Every tab scrolls (ADR 0053). Sources follows the
+  // options: every source the pages cite, numbered as their tags are, then the issues the reply names.
   on('ui.render', { component: 'Pane', requestId: DECISION_PANE }, async ($, e) => {
     const elements = $.ui.resolve(e)
     const { Box, Button, Markdown, Text } = elements
@@ -4791,20 +5117,28 @@ export const register: Register = (on, _options) => {
     const replied = await read($, replyTickets)
     const cards = await read($, ticketStates)
     const openRows = await read($, ticketOpen)
-    const newProps = takesNewProps(await engineBase($))
-    // The page's pictures are sized at the top of the body's width range and the desktop scales them to their tile,
-    // so their right edges meet the title's (issue 165's rule, applied to the deck in issue 167).
+    const caption = takesNewProps(await engineBase($)) ? { size: 'caption' as const } : {}
+    // Pictures fill the top of the body's width range, so their right edges meet the text's (issue 165's rule).
     const room = cardWidth(e.props.bodyColumns)
     const rule = room + Math.round(2 * DECK_COLUMN_PT)
-    const tabs = [...held.options, ...(replied.length === 0 ? [] : ['Issues'])]
-    // A tab picked on another question gives way: each decision opens on its recommendation.
-    const shown = at.ask === held.ask && at.tab < tabs.length ? at.tab : held.recommend
-    const pick = (tab: number) => () => update($, deckPage, () => ({ tab, ask: held.ask }))
+    const pages = deckPagesOf(held)
+    const sourcesTab = held.options.length
+    // A tab is its option's index, so a page stays with its option when the wrap-up's buttons relabel it (`asButtons`).
+    const ranked = rankedOf(held)
+    // With no pages there are no tabs: the tickets the reply names sit under the one line instead. With pages, Sources
+    // follows the options: every argument cites one (spec 176).
+    const tabs = pages === undefined ? [] : [...ranked, sourcesTab]
+    const shown = at.ask === held.ask && tabs.includes(at.tab) ? at.tab : tabs[0] ?? held.recommend
+    const labelOf = (tab: number) => held.options[tab] ?? 'Sources'
+    const pick = (tab: number) => async () => {
+      await update($, deckPage, () => ({ tab, ask: held.ask }))
+      await deckToTop($)
+    }
     // The selected tab's label is white over a white bar; the others grey with none. The recommended option keeps its
     // green dot. Tabs that would not fit one row stack, and the bar moves to the selected one's left edge, where an
     // underline between two stacked labels read as a divider (the design review of #134).
-    const tabWidth = (label: string, i: number) => Math.ceil(sfWidth(label, 13) * 1.02 + (i < held.options.length ? 32 : 16))
-    const stacked = tabs.reduce((sum, label, i) => sum + tabWidth(label, i), 0) + (tabs.length - 1) * 2 * DECK_COLUMN_PT > room
+    const tabWidth = (tab: number) => Math.ceil(sfWidth(labelOf(tab), 13) * 1.02 + (tab < sourcesTab ? 32 : 16))
+    const stacked = tabs.reduce((sum, tab) => sum + tabWidth(tab), 0) + (tabs.length - 1) * 2 * DECK_COLUMN_PT > room
     const bar = (key: string, width: number, height: number, isOn: boolean, alt: string) =>
       Svg === undefined ? null : (
         <Box key={key}>
@@ -4812,30 +5146,30 @@ export const register: Register = (on, _options) => {
             width={width} height={height} alt={alt} />
         </Box>
       )
-    const tabRow = (
+    const tabRow = tabs.length === 0 ? null : (
       <Box key="deck-tabs" flexDirection="column">
         <Box key="deck-tab-row" flexDirection={stacked ? 'column' : 'row'} columnGap={2}>
-          {tabs.map((label, i) => {
-            const isOption = i < held.options.length
-            const id = isOption ? String(i) : label
-            const alt = i === shown ? `${label}, selected` : label
+          {tabs.map(tab => {
+            const label = labelOf(tab)
+            const id = tab < sourcesTab ? String(tab) : label
+            const alt = tab === shown ? `${label}, selected` : label
             const named = (
               <Box key={`deck-tablabel-${id}`} flexDirection="row" columnGap={1} alignItems="center">
-                {stacked ? bar(`deck-tabbar-${id}`, 2, 18, i === shown, alt) : null}
-                {!isOption ? null : i === held.recommend ? <Text color={RECOMMENDED}>●</Text> : <Text dimColor>●</Text>}
-                <Button key={`deck-tab-${id}`} plain label={label} {...(i === shown ? {} : { dimColor: true })} onPress={pick(i)} />
+                {stacked ? bar(`deck-tabbar-${id}`, 2, 18, tab === shown, alt) : null}
+                {tab >= sourcesTab ? null : tab === held.recommend ? <Text color={RECOMMENDED}>●</Text> : <Text dimColor>●</Text>}
+                <Button key={`deck-tab-${id}`} plain label={label} {...(tab === shown ? {} : { dimColor: true })} onPress={pick(tab)} />
               </Box>
             )
             return (
               <Box key={`deck-tabcol-${id}`} flexDirection="column">
                 {named}
-                {stacked ? null : bar(`deck-tabbar-${id}`, tabWidth(label, i), 2, i === shown, alt)}
+                {stacked ? null : bar(`deck-tabbar-${id}`, tabWidth(tab), 2, tab === shown, alt)}
               </Box>
             )
           })}
         </Box>
         {Svg === undefined ? null : (
-          // A pane's Svg takes pixels only, and `room` falls a few short of the tiles' edge: drawn a column wider, clipped to it.
+          // A pane's Svg takes pixels only, and `room` falls a few short of the body's edge: drawn a column wider, clipped to it.
           <Box key="deck-tab-rule" width="100%" overflow="hidden">
             <Svg source={`<svg xmlns="http://www.w3.org/2000/svg" width="${rule}" height="1"><rect width="${rule}" height="1" fill="${REST_LINE}"/></svg>`}
               width={rule} height={1} alt="The tabs' rule" />
@@ -4843,77 +5177,190 @@ export const register: Register = (on, _options) => {
         )}
       </Box>
     )
-    const caption = newProps ? { size: 'caption' as const } : {}
-    const page = held.pages?.[shown] ?? null
-    // An option with no page shows how it compares instead, from its cells.
-    const compared: Diagram[] = page !== null || held.dimensions.length === 0 ? [] : [{
-      point: 'why', title: 'How it compares',
-      draw: { shape: 'lines', lines: held.dimensions.map((dimension, d) => ({ text: `${dimension} ${held.cells[d]?.[shown]?.value ?? ''}` })) },
-    }]
-    const what = page?.what ?? ''
-    const scale = workScale(held.pages ?? [])
-    const offered = page?.diagrams ?? compared
-    // Every diagram draws, the most decisive first, and the pane scrolls to hold them (issue 167): none gives way.
-    const fits = offered
-    // `paired` draws the picture at half the page; `inRow` also sizes the tile to half its row (a column sizes it itself).
-    // A tile alone in its row spans it, so its frame meets its neighbours' edges whatever its picture's width (issue 167).
-    const tile = (one: Diagram, i: number, paired: boolean, inRow = paired) => {
-      const inner = pictureRoom(room, paired)
-      const picture = Svg === undefined ? null : diagramPicture(one.draw, inner, scale)
-      return (
-        <Box key={`deck-diagram-${i}`} flexDirection="column" rowGap={1} borderStyle="round" borderColor={CARD_LINE} backgroundColor={FILL} paddingX={1}
-          {...(inRow ? { width: '50%', flexGrow: 1, flexShrink: 1 } : paired ? {} : { width: '100%' })}>
-          <Text key="title" dimColor wrap="wrap">{one.title}</Text>
-          {picture !== null && Svg !== undefined ? (
-            <Box key="picture"><Svg source={picture.source} width={picture.width} height={picture.height} alt={picture.alt} /></Box>
-          ) : one.draw.shape === 'lines' ? (
-            <Box key="lines" flexDirection="column">
-              {one.draw.lines.map((line, l) => <Text key={`line-${l}`} wrap="wrap">{line.text}</Text>)}
-            </Box>
-          ) : null}
-          {one.says === undefined ? null : <Text key="says" wrap="wrap">{one.says}</Text>}
-          {one.terms === undefined ? null : (
-            <Box key="terms" flexDirection="column">
-              {one.terms.map((term, n) => (
-                <Box key={`term-${n}`} flexDirection="row" columnGap={1} alignItems="flex-start">
-                  <Box flexShrink={0}><Text {...caption}>{term.term}</Text></Box>
-                  <Text dimColor wrap="wrap" {...caption}>{term.meaning}</Text>
-                </Box>
-              ))}
-            </Box>
-          )}
+    // A dim caption over its line, the one layout for risk, fallback and why not, and the one heading style the page's
+    // sections share with "Why not the others" (the design reviews, 2026-11-14).
+    const labelOver = (key: string, rows: { label: string; text: string }[]) => (
+      <Box key={key} flexDirection="column" rowGap={1}>
+        {rows.map((row, n) => (
+          <Box key={`${key}-${n}`} flexDirection="column">
+            <Text dimColor wrap="wrap" {...caption}>{row.label}</Text>
+            <Text wrap="wrap">{row.text}</Text>
+          </Box>
+        ))}
+      </Box>
+    )
+    // Every source the pages cite, once, numbered in order of first citation across the tabs (spec 176).
+    const citations = pages === undefined ? { sources: [], tags: [] } : citationsOf(pages, ranked)
+    // Every shot the decision draws opens in the shot pane, a tab of its own (the owner, 2026-11-14), in Sources order.
+    const seen = deckShotsOf(held)
+    // ⛶ (EXPAND) under a shot the pane draws, for the source numbered `source`, `offset` into its files (a pair's After
+    // is 1): the expand glyph alone in a Button, where "Full size" restated the glyph (the owner, 2026-11-14).
+    const fullButton = (key: string, source: number, offset = 0) => {
+      const index = seen.findIndex(one => one.source === source)
+      return index < 0 || Svg === undefined ? null : (
+        <Box key={`${key}-row`} flexDirection="row">
+          <Button key={key} label={EXPAND} onPress={() => void openShot($, held, index + offset)} />
         </Box>
       )
     }
-    // A wide page stacks two columns each on its own; a narrower one lays rows, two halves side by side.
-    const index = (one: Diagram) => fits.indexOf(one)
-    const diagramRows = room >= WIDE_ROOM
-      ? [(
-          <Box key="deck-columns" flexDirection="row" columnGap={1} alignItems="flex-start">
-            {columnsOf(fits, room, scale).map((column, c) => (
-              <Box key={`deck-column-${c}`} flexDirection="column" rowGap={1} width="50%" flexGrow={1} flexShrink={1}>
-                {column.map(one => tile(one, index(one), true, false))}
-              </Box>
-            ))}
-          </Box>
-        )]
-      : rowsOf(fits, room).map((row, r) => (
-          <Box key={`deck-row-${r}`} flexDirection="row" columnGap={1} alignItems="flex-start">
-            {row.map(one => tile(one, index(one), row.length === 2))}
-          </Box>
-        ))
-    const option = held.options[shown]
-    const sentOption = held.sent === undefined ? undefined : held.options[held.sent]
-    const choose = sentOption !== undefined ? (
-      <Box key="deck-sent" flexDirection="row">
-        <Text wrap="wrap">{`You chose ${sentOption}. It reaches the agent when its turn ends.`}</Text>
-      </Box>
-    ) : option === undefined ? null : (
-      <Box key="deck-choose-row" flexDirection="row">
-        <Button key="deck-choose" label={option}
-          onPress={() => sendChoice($, held, shown, 'pane press')} />
+    // The bitmaps one tree draws share the desktop's budget; a shot past it draws a line, so the tree still draws.
+    let picturesLeft = TREE_PICTURES
+    const affords = (sources: readonly string[]) => {
+      const total = sources.reduce((sum, one) => sum + one.length, 0)
+      if (total > picturesLeft) return false
+      picturesLeft -= total
+      return true
+    }
+    // A source's number in a thin box that hugs it: an Svg a caption's line tall with 2px above and below, since a
+    // bordered Box takes a whole row for each edge (the design review, 2026-11-14). The terminal draws the number alone.
+    const tag = (key: string, n: number) => {
+      const label = `S${n}`
+      if (Svg === undefined) return <Box key={key}><Text dimColor>{label}</Text></Box>
+      const width = textWidth(label, TAG_FONT_PX) + 2 * TAG_PAD_X_PX
+      const height = TAG_LINE_PX + 2 * TAG_PAD_Y_PX
+      return (
+        <Box key={key} flexShrink={0}>
+          <Svg source={`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect x="0.5" y="0.5" width="${width - 1}" height="${height - 1}" rx="3" fill="none" stroke="${REST_LINE}"/><text x="${width / 2}" y="${TAG_PAD_Y_PX + TAG_BASELINE_PX}" text-anchor="middle" font-family="-apple-system, system-ui, sans-serif" font-size="${TAG_FONT_PX}" fill="${INACTIVE}">${label}</text></svg>`}
+            width={width} height={height} alt={label} />
+        </Box>
+      )
+    }
+    const sourceTag = (n: number, source: number, rests: HumanQueueRests) => (
+      <Box key={`deck-source-${n}`} flexDirection="row" columnGap={1} alignItems="center">
+        {tag(`deck-tag-${n}`, source)}
+        <Box key={`deck-kind-${n}`} flexShrink={1}><Text dimColor wrap="wrap" {...caption}>{tagLine(rests)}</Text></Box>
       </Box>
     )
+    const pictureNode = (one: HumanQueueArgument, n: number, width: number) => {
+      if (Svg === undefined || one.picture === undefined) return null
+      // Drawn at its design size at most (the design review, 2026-11-14): scaled up, its type outranked the pane's own.
+      const drawn = argumentPicture(one.picture, Math.min(width, ARGUMENT_WIDTH))
+      // An HTML picture spends the tree's picture budget too, so shots past it fall back before the pane freezes (the spec review).
+      const node = 'refused' in drawn || !affords([drawn.source]) ? null : (
+        <Box key={`deck-picture-${n}`} marginTop={1}><Svg source={drawn.source} width={drawn.width} height={drawn.height} alt={one.claim} /></Box>
+      )
+      // A picture the desktop would refuse draws as a line, so the rest of the case still draws (the tree guard).
+      return node !== null && refusal(node) === null ? node : (
+        <Box key={`deck-picture-${n}`} marginTop={1}><Text dimColor wrap="wrap" {...caption}>This picture could not be drawn.</Text></Box>
+      )
+    }
+    // A shot as the plain Svg the queue card draws a bitmap in, never past its pixel size, its dim label drawn in the
+    // same Svg; a fix's Before and After at one scale, side by side or stacked in one Svg with no gap between them, and
+    // the callout a numbered ring in the After, named under it.
+    const shotNode = (one: HumanQueueArgument, shot: HumanQueueShot, n: number, width: number, source: number) => {
+      if (Svg === undefined) return null
+      const key = `deck-shot-${n}`
+      // At most a third of the pane's body tall, a pair's two images and their labels together, so the first screen
+      // still reaches risk, why not and Choose this; ⛶ shows the shot whole (spec 176).
+      const cap = Math.round(SHOT_SHARE * Math.max(12, e.props.scroll.bodyRows) * 19)
+      const sideBySide = shotSizes(shot, width, cap - (shot.before === undefined ? 0 : SHOT_LABEL_PX))
+      const sizes = shot.before === undefined || sideBySide.side === true ? sideBySide : shotSizes(shot, width, cap - 2 * SHOT_LABEL_PX)
+      const point = calloutAt(shot, sizes.after)
+      // The ring sits off the point, a leader running to just short of it, so the mark never covers what it names (the design review).
+      const mark = point === null ? null : calloutMark(point, sizes.after, shot.callout?.side)
+      const ring = mark === null ? '' : ringSvg(mark)
+      // One labelled image: its label a caption's line, cut to the image's width, and the image under it with no gap.
+      type Part = { label: string; base64: string; size: { width: number; height: number }; overlay: string }
+      const fitted = (label: string, room: number) => {
+        let text = label
+        while (text.length > 1 && sfWidth(text, TAG_FONT_PX) > room) text = text.slice(0, -2) + '…'
+        return text
+      }
+      const drawParts = (parts: Part[]) => {
+        let top = 0
+        const body: string[] = []
+        for (const part of parts) {
+          const image = pictureSvg(part.base64, part.size.width, part.size.height, framedSvg(part.size) + part.overlay)
+          if (image === null) return null
+          // A single shot draws no label: its build and file are on the tag line above (rule 1, the review of 0.283.0).
+          const labelPx = part.label === '' ? 0 : SHOT_LABEL_PX
+          if (part.label !== '') body.push(`<text x="0" y="${top + SHOT_LABEL_BASELINE_PX}" font-family="-apple-system, system-ui, sans-serif" font-size="${TAG_FONT_PX}" fill="${DIM_TEXT}">${esc(fitted(part.label, part.size.width))}</text>`)
+          body.push(image.replace('<svg ', `<svg x="0" y="${top + labelPx}" `))
+          top += labelPx + part.size.height
+        }
+        const across = Math.max(...parts.map(part => part.size.width))
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${across}" height="${top}" viewBox="0 0 ${across} ${top}">${body.join('')}</svg>`
+        return svg.length > SVG_MAX ? null : { source: svg, width: across, height: top }
+      }
+      const was = shot.before === undefined || sizes.before === undefined ? undefined
+        : { label: shotLabel(shot.before, 'Before'), base64: shot.before.image.base64, size: sizes.before, overlay: '' }
+      const now = { label: was === undefined ? '' : shotLabel(shot, 'After'), base64: shot.image.base64, size: sizes.after, overlay: ring }
+      // Side by side, Before then After each in its own Svg; stacked, the two in one Svg, so nothing comes between them.
+      const drawings: { id: string; alt: string; drawn: ReturnType<typeof drawParts> }[] = was === undefined
+        ? [{ id: `${key}-after`, alt: `${now.label}: ${one.claim}`, drawn: drawParts([now]) }]
+        : sizes.side === true
+          ? [
+              { id: `${key}-before`, alt: `${was.label}: ${one.claim}, before`, drawn: drawParts([was]) },
+              { id: `${key}-after`, alt: `${now.label}: ${one.claim}, after`, drawn: drawParts([now]) },
+            ]
+          : [{ id: `${key}-stack`, alt: `${was.label}, then ${now.label}: ${one.claim}`, drawn: drawParts([was, now]) }]
+      if (drawings.some(one => one.drawn === null) || !affords(drawings.map(one => one.drawn!.source))) {
+        return (
+          <Box key={key} flexDirection="column" marginTop={1}>
+            <Box key={`${key}-past`}><Text dimColor wrap="wrap" {...caption}>This shot is in Sources</Text></Box>
+            {fullButton(`${key}-full`, source)}
+          </Box>
+        )
+      }
+      const images = drawings.map(({ id, alt, drawn }) => (
+        <Box key={id} flexShrink={0}><Svg source={drawn!.source} width={drawn!.width} height={drawn!.height} alt={alt} /></Box>
+      ))
+      return (
+        <Box key={key} flexDirection="column" marginTop={1}>
+          {images.length === 1 ? images : <Box key={`${key}-pair`} flexDirection="row" columnGap={1} alignItems="flex-start">{images}</Box>}
+          {/* The callout's name and ⛶ share a row (the design review, round 5). */}
+          <Box key={`${key}-foot`} flexDirection="row" columnGap={1} alignItems="center" justifyContent="flex-end" marginTop={0.5}>
+            {mark === null || shot.callout === undefined ? null : <Box key={`${key}-callout`} flexGrow={1} flexShrink={1}><Text dimColor wrap="wrap" {...caption}>{`1 · ${shot.callout.label}`}</Text></Box>}
+            {fullButton(`${key}-full`, source)}
+          </Box>
+        </Box>
+      )
+    }
+    const exhibit = (one: HumanQueueArgument, n: number, width: number, source: number) => {
+      const shot = shotOf(one)
+      return [shot === undefined ? null : shotNode(one, shot, n, width, source), pictureNode(one, n, width)]
+    }
+    // An option's page as a report (spec 176): every argument that draws an exhibit, a shot or a picture, draws it under
+    // its own claim, in order (the owner, 0.282.0: "when you are discussing something, put an image there, that's it").
+    const casePage = (page: HumanQueueOptionPage, p: number) => {
+      const tags = citations.tags[p] ?? []
+      return [
+        <Box key="deck-what"><Text wrap="wrap">{page.what}</Text></Box>,
+        page.dependsOn === undefined ? null : (
+          <Box key="deck-depends" borderStyle="round" borderColor={CARD_LINE} backgroundColor={FILL} paddingX={1}>
+            <Text wrap="wrap">{`This depends on ${page.dependsOn.on}; choose “${held.options[page.dependsOn.otherwise] ?? ''}” instead if ${page.dependsOn.if.replace(/[.!]+$/, '')}.`}</Text>
+          </Box>
+        ),
+        ...page.arguments.map((one, n) => (
+          <Box key={`deck-argument-${n}`} flexDirection="row" columnGap={1} alignItems="flex-start">
+            <Box width={NUMERAL_CELLS} flexShrink={0}><Text dimColor>{`${n + 1}.`}</Text></Box>
+            <Box key={`deck-body-${n}`} flexDirection="column" flexGrow={1} flexShrink={1}>
+              <Box key={`deck-claim-${n}`}><Text wrap="wrap">{one.claim}</Text></Box>
+              {sourceTag(n, tags[n] ?? 0, one.rests)}
+              {/* Its exhibit sits under its claim's text, past the numeral's column. */}
+              {exhibit(one, n, room - CLAIM_INDENT_PX, tags[n] ?? 0)}
+            </Box>
+          </Box>
+        )),
+        page.fallback === undefined
+          ? labelOver('deck-risk', [{ label: 'Risk', text: page.risk }])
+          : labelOver('deck-risk', [{ label: 'Risk → fallback', text: `${page.risk.replace(/[.!]+$/, '')} → ${/^[A-Z][a-z]/.test(page.fallback) ? page.fallback[0]!.toLowerCase() + page.fallback.slice(1) : page.fallback}` }]),
+        typeof page.whyNot === 'string'
+          ? labelOver('deck-whynot', [{ label: 'Why not', text: page.whyNot }])
+          : (
+              <Box key="deck-whynot" flexDirection="column" rowGap={1}>
+                <Text dimColor wrap="wrap" {...caption}>Why not the others</Text>
+                {/* Stacked, the option over its reason: a label column wrapped a long option's name (the design review). */}
+                {page.whyNot.map((one, n) => (
+                  <Box key={`deck-whynot-${n}`} flexDirection="column">
+                    <Text dimColor wrap="wrap">{held.options[one.option] ?? ''}</Text>
+                    <Text wrap="wrap">{one.line}</Text>
+                  </Box>
+                ))}
+              </Box>
+            ),
+      ]
+    }
     // The tickets the reply names: a closed row each; ▸ opens its state, parent, labels and outline, ▸ again closes it.
     const ticketNode = (ticket: HumanQueueReplyTicket, state: HumanQueueTicketState | undefined, isOpen: boolean) => (
       <Box key={`deck-ticket:${ticket.key}`} flexDirection="column">
@@ -4937,24 +5384,124 @@ export const register: Register = (on, _options) => {
         ) : null}
       </Box>
     )
-    const body = shown >= held.options.length
-      ? replied.map(ticket => {
-          const state = cards[ticket.key]
-          return ticketNode(ticket, state, state !== undefined && openRows[ticket.key] === true)
-        })
-      : [
-          what === '' ? null : <Box key="deck-what"><Text wrap="wrap">{what}</Text></Box>,
-          ...diagramRows,
-          // Nothing below the question is said, so a blank pane never reads as a broken one (#160).
-          what !== '' || offered.length > 0 || held.grant !== undefined ? null : (
+    const tickets = replied.map(ticket => {
+      const state = cards[ticket.key]
+      return ticketNode(ticket, state, state !== undefined && openRows[ticket.key] === true)
+    })
+    // One file's whole frame in Sources, the part the page shows outlined in the same Svg: a pair's Before and After
+    // each have their own (`which`), `offset` its place in the source's files for ⛶.
+    const frameNode = (one: ShotFile, n: number, claim: string, which: 'Before' | 'After' | undefined, offset: number) => {
+      if (Svg === undefined) return null
+      const id = which === 'Before' ? `deck-frame-${n}-before` : `deck-frame-${n}`
+      if (one.frame === undefined) return fullButton(`${id}-full`, n, offset)
+      // At its true size, its pixels over the file's scale, never past the text column: a 2x file's frame is encoded
+      // at twice the column's points (FRAME_POINTS), so it draws two pixels a point (the design review of 0.282.0).
+      const scale = one.scale ?? 1
+      const size = fit(one.frame.width / scale, one.frame.height / scale, room - SOURCE_INDENT_PX, Infinity)
+      const box = cropOutline(one, size)
+      const outline = box === null ? '' :
+        `<rect x="${Math.max(1, box.x)}" y="${Math.max(1, box.y)}" width="${Math.max(1, Math.min(box.w, size.width - 2 - box.x))}" height="${Math.max(1, Math.min(box.h, size.height - 2 - box.y))}" rx="2" fill="none" stroke="${TEXT}" stroke-width="1.5"/>`
+      // Framed as the page frames a shot: a window's dark margin otherwise read as the frame sitting right of its filename.
+      const source = pictureSvg(one.frame.base64, size.width, size.height, framedSvg(size) + outline)
+      if (source === null || !affords([source])) {
+        return (
+          <Box key={id} flexDirection="column">
+            <Box key={`${id}-past`}><Text dimColor wrap="wrap" {...caption}>This frame is too large to draw beside the others.</Text></Box>
+            {fullButton(`${id}-full`, n, offset)}
+          </Box>
+        )
+      }
+      return (
+        <Box key={id} flexDirection="column" marginTop={1}>
+          <Box key={`${id}-image`}><Svg source={source} width={size.width} height={size.height} alt={`The whole frame of ${one.file}`} /></Box>
+          {/* ⛶ right-aligned on the caption's row, as it sits on the callout's row under a shot on the page (the design review of 0.282.0). */}
+          <Box key={`${id}-foot`} flexDirection="row" columnGap={1} alignItems="center" marginTop={0.5}>
+            <Box key={`${id}-caption`} flexGrow={1} flexShrink={1}><Text dimColor wrap="wrap" {...caption}>{`${claim}${which === undefined ? '' : ` · ${which}`}`}</Text></Box>
+            {fullButton(`${id}-full`, n, offset)}
+          </Box>
+        </Box>
+      )
+    }
+    // One source's lines, by kind: what it is, then the words it rests on.
+    const sourceLines = (source: Source) => {
+      const { rests, n } = source
+      // A quote is drawn in plain Text, so its markdown marks go and its words stay (the design review).
+      const quote = rests.excerpt === undefined ? null : <Box key={`deck-sources-${n}-excerpt`}><Text wrap="wrap">{`“${plain(rests.excerpt)}”`}</Text></Box>
+      switch (rests.kind) {
+        case 'shot':
+          // A pair lists both files, Before first, each with its own line and frame (the design review).
+          return rests.shot === undefined ? [<Box key={`deck-sources-${n}-what`}><Text wrap="wrap">A shot</Text></Box>] : filesOf(rests.shot).flatMap(({ which, one }, offset) => [
+            <Box key={which === 'Before' ? `deck-sources-${n}-before` : `deck-sources-${n}-what`} {...(which === 'After' ? { marginTop: 1 } : {})}><Text wrap="wrap">{which === undefined ? shotLine(one) : `${which} · ${shotLine(one)}`}</Text></Box>,
+            frameNode(one, n, source.claim, which, offset),
+          ])
+        case 'run':
+        case 'read':
+          return [<Box key={`deck-sources-${n}-what`}><Text wrap="wrap">{plain(rests.ref ?? '')}</Text></Box>, quote]
+        case 'ruling':
+          return [rests.ref === undefined ? null : <Box key={`deck-sources-${n}-what`}><Text dimColor wrap="wrap" {...caption}>{plain(rulingRef(rests.ref))}</Text></Box>, quote]
+        case 'estimate':
+        case 'assumption':
+          return [
+            <Box key={`deck-sources-${n}-what`}><Text wrap="wrap">{source.claim}</Text></Box>,
+            <Box key={`deck-sources-${n}-kind`}><Text dimColor wrap="wrap" {...caption}>{`The agent's own ${rests.kind}, not observed`}</Text></Box>,
+          ]
+      }
+    }
+    const sourceEntry = (key: string, n: number, lines: RenderChildren) => (
+      <Box key={key} flexDirection="row" columnGap={1} alignItems="flex-start">
+        <Box width={SOURCE_CELLS} flexShrink={0}><Text dimColor>{`S${n}`}</Text></Box>
+        <Box flexDirection="column" flexGrow={1} flexShrink={1}>{lines}</Box>
+      </Box>
+    )
+    // The Sources tab (spec 176), in place of Issues: every cited source once, grouped by kind, each by the number its
+    // tags carry; then the issues the reply names, their rows as before, numbered on from the last source.
+    const sourcesPage = () => [
+      ...GROUPS.map(group => {
+        const entries = citations.sources.filter(one => (group.kinds as readonly string[]).includes(one.rests.kind))
+        return entries.length === 0 ? null : (
+          <Box key={`deck-sources-group-${group.label}`} flexDirection="column" rowGap={1}>
+            <Text dimColor {...caption}>{group.label}</Text>
+            {entries.map(one => sourceEntry(`deck-sources-${one.n}`, one.n, sourceLines(one)))}
+          </Box>
+        )
+      }),
+      tickets.length === 0 ? null : (
+        <Box key="deck-sources-group-Issues" flexDirection="column" rowGap={1}>
+          <Text dimColor {...caption}>Issues</Text>
+          {tickets.map((row, i) => sourceEntry(`deck-sources-${citations.sources.length + i + 1}`, citations.sources.length + i + 1, row))}
+        </Box>
+      ),
+    ]
+    const page = pages?.[shown]
+    const onSources = pages !== undefined && shown === sourcesTab
+    const report = page === undefined || onSources ? undefined : casePage(page, shown)
+    // With no pages, one line says so and the options' buttons wait under it (#160): a blank pane never reads as broken.
+    const sentOption = held.sent === undefined ? undefined : held.options[held.sent]
+    const choose = sentOption !== undefined ? (
+      <Box key="deck-sent" flexDirection="row">
+        <Text wrap="wrap">{`You chose ${sentOption}. It reaches the agent when its turn ends.`}</Text>
+      </Box>
+    ) : pages === undefined ? (
+      <Box key="deck-choose-row" flexDirection="row" columnGap={1}>
+        {ranked.map(i => <Button key={`deck-choose-${i}`} label={held.options[i]!} onPress={() => sendChoice($, held, i, 'pane press')} />)}
+      </Box>
+    ) : onSources ? null : (
+      // Choose this says the option it chooses (issue 140).
+      <Box key="deck-choose-row" flexDirection="row">
+        <Button key="deck-choose" label={held.options[shown]!} onPress={() => sendChoice($, held, shown, 'pane press')} />
+      </Box>
+    )
+    const body = pages === undefined
+      ? [
+          held.grant !== undefined ? null : (
             <Box key="deck-none">{held.visualsFailed === true
               ? <Text color="error" wrap="wrap">The visuals for this decision could not be drawn.</Text>
               : <Text dimColor wrap="wrap">No pages for this decision: the agent did not describe its options.</Text>}</Box>
           ),
+          ...tickets,
         ]
-    // The choose button sits at the pane's foot on a page that fits, and after the last diagram on one that scrolls (issue 167);
-    // it says the option it chooses (issue 140).
-    return (
+      : onSources ? sourcesPage() : report ?? []
+    const tree = (
       // A height of 100% drew as tall as the content; a minimum in rows, a line short of the pane's, holds the foot.
       <Box flexDirection="column" rowGap={1} minHeight={Math.max(1, e.props.scroll.bodyRows - 2)} justifyContent="space-between">
         <Box key="deck-top" flexDirection="column" rowGap={1}>
@@ -4962,7 +5509,82 @@ export const register: Register = (on, _options) => {
           {tabRow}
           <Box key={`deck-page-${shown}`} flexDirection="column" rowGap={1}>{body}</Box>
         </Box>
-        {shown >= held.options.length ? null : choose}
+        {choose}
+      </Box>
+    )
+    // A tree the desktop refuses would draw its own "has not drawn" with no way out, as on the queue pane.
+    const why = refusal(tree)
+    return why === null ? tree : (
+      <Box flexDirection="column" rowGap={1}>
+        <Markdown key="deck-question" text={`### ${held.headline}`} />
+        <Text key="deck-failed" color="error" wrap="wrap">{`This decision could not be drawn: ${why}`}</Text>
+      </Box>
+    )
+  })
+
+  // The shot pane (spec 176): one of the decision's shots in a tab of its own, beside the Decision tab. Its crop leads,
+  // cut fresh from the file and drawn at its true size, then the whole frame with the crop outlined; ◀ ▶ step through
+  // the decision's shots and Open hands the file to the system's viewer.
+  on('ui.render', { component: 'Pane', requestId: SHOT_PANE }, async ($, e) => {
+    const elements = $.ui.resolve(e)
+    const { Box, Button, Text } = elements
+    const Svg = e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : undefined
+    const held = await read($, decision)
+    const at = await read($, shotView)
+    const seen = held === null ? [] : deckShotsOf(held)
+    const one = held !== null && at !== null && at.ask === held.ask ? seen[at.index] : undefined
+    if (held === null || at === null || one === undefined) return <Text dimColor>No shot is open.</Text>
+    const go = (index: number) => void openShot($, held, index, false)
+    const open = () => openOnHost($, one.file)
+    if (Svg === undefined) {
+      return (
+        <Box flexDirection="column">
+          <Text dimColor wrap="wrap">{one.label}</Text>
+          <Button key="full-open" label="Open" onPress={open} />
+        </Box>
+      )
+    }
+    const root = await $.session.cwd()
+    const room = cardWidth(e.props.bodyColumns)
+    const caption = takesNewProps(await engineBase($)) ? { size: 'caption' as const } : {}
+    const scale = one.scale ?? 1
+    // A 2x file is fetched at twice the points it draws at, the pane's width, up to its own pixels (sips never widens
+    // it), so it draws two pixels a point: at the fetcher's own 1280, then narrowed by the budget, its whole frame drew
+    // soft (the design review of 0.282.0). A 1x file is fetched as before.
+    const wide = scale > 1 ? Math.ceil(room * scale) : undefined
+    const size = pictureSize($, one.file, root, wide)
+    const fullTall = fullPictureTall(Math.max(12, e.props.scroll.bodyRows))
+    // A crop leads, cut fresh from the file at its full resolution and drawn as wide as the pane allows but never past
+    // its true size, its pixels over the file's scale, so its type reads (the owner, spec 176); the shot record's small
+    // encode is never upscaled. A crop that cannot be cut leaves the whole frame alone, as without one.
+    const cut = one.crop === undefined ? undefined : cropState($, one.file, one.crop)
+    const cutSize = typeof cut === 'object' ? pictureSize($, cut.part, root, wide) : cut
+    // The lead picture in the frame the page draws a shot in, its callout's ring over it: drawn bare on the pane, the
+    // crop's own controls read as live ones (the design review of 0.282.0). Each strip draws its part of both.
+    const marked = (whole: { width: number; height: number }, space: { x: number; y: number; w: number; h: number } | undefined) =>
+      (top: number, k: number) => {
+        const drawn = { width: Math.round(whole.width * k), height: Math.round(whole.height * k) }
+        const point = one.callout === undefined ? null : calloutAt({ callout: one.callout, ...(space ? { crop: space } : {}), ...(one.size ? { size: one.size } : {}), image: whole }, drawn)
+        return framedSvg(drawn, top) + (point === null ? '' : ringSvg(calloutMark(point, drawn, one.callout?.side), top))
+      }
+    const crop = typeof cut !== 'object' ? cut : typeof cutSize !== 'object' ? cutSize
+      : strippedPicture($, cut.part, root, cutSize, room, Infinity, Math.floor((TREE_PICTURES * 2) / 3), marked(cutSize, one.crop), one.crop!.w / scale, wide)
+    const lead = crop === 'failed' ? undefined : crop
+    // The file's own size, the space the crop is in: the cut read it, else the shot record carries it.
+    const space = typeof cut === 'object' ? cut.size : one.size
+    // The crop the claim pointed at, outlined on the whole frame in each strip it crosses, in the file's own pixels;
+    // with no crop the whole frame leads, and carries the ring.
+    const state = typeof size === 'string' ? size : strippedPicture($, one.file, root, size, room, fullTall, lead === undefined ? TREE_PICTURES : Math.floor(TREE_PICTURES / 3), (top, k0) => {
+      if (one.crop === undefined) return marked(size, undefined)(top, k0)
+      const k = space === undefined ? k0 : (k0 * size.width) / space.width
+      const c = one.crop
+      return framedSvg({ width: Math.round(size.width * k0), height: Math.round(size.height * k0) }, top) +
+        `<rect x="${Math.round(c.x * k) + 1}" y="${Math.round(c.y * k) - top + 1}" width="${Math.max(1, Math.round(c.w * k) - 2)}" height="${Math.max(1, Math.round(c.h * k) - 2)}" rx="2" fill="none" stroke="${TEXT}" stroke-width="2"/>`
+    }, (space?.width ?? size.width) / scale, wide)
+    return (
+      <Box flexDirection="column">
+        {fullPictureView({ Box, Text, Button, Svg }, state, one.alt, at.index, seen.length, go,
+          { ...(lead === undefined ? {} : { crop: lead }), label: one.label, open, ...(one.callout === undefined ? {} : { note: { text: `1 · ${one.callout.label}`, caption } }) })}
       </Box>
     )
   })
@@ -5425,35 +6047,20 @@ export const register: Register = (on, _options) => {
       const reserved = 12 + (item === undefined || composeItem(item) === null ? nativeBodyRows(card) : lineRows(item.heading))
       const tall = shown.length === 1 ? Math.max(1, paneRows - reserved) * 19 : Math.round((paneRows * 19 * 0.45) / Math.max(1, pictureRowsOf))
       const cell = across === 1 ? room : Math.floor((room - 10) / 2)
-      // A tall mock fitted to the card's height would draw its text too small to read, so it keeps the card's width (#124).
-      // It draws as strips stacked with no gap, each its own copy, sharing the tree's picture budget, so its type stays
-      // sharp where one squeezed copy blurred (#136); to the eye it is one image the card scrolls by (ADR 0049).
-      type Drawn = { width: number; height: number; strips: { source: string; width: number; height: number }[] }
-      const stripped = (url: string, size: { width: number; height: number }, frame: number, high: number, share: number): Drawn | 'failed' | 'pending' | 'too large' => {
-        const across = legible(size.width, size.height, frame, high).width
-        const plan = stripsOf(size.width, size.height, across, share)
-        const loaded = plan.map(one => ({ one, state: pictureOf($, url, root, one.strip) }))
-        if (loaded.some(one => one.state === 'failed')) return 'failed'
-        if (loaded.some(one => one.state === 'too large')) return 'too large'
-        if (loaded.some(one => one.state === 'pending')) return 'pending'
-        const strips = loaded.map(({ one, state }) => ({ source: pictureSvg((state as Loaded).base64, one.width, one.height), width: one.width, height: one.height }))
-        if (strips.some(one => one.source === null)) return 'too large'
-        return { width: across, height: strips.reduce((sum, one) => sum + one.height, 0), strips: strips as Drawn['strips'] }
-      }
       const pictureStates = shown.map((one, i) => {
         const size = sizes[i]!
-        return typeof size === 'string' ? size : stripped(one.url, size, cell, tall, Math.floor(TREE_PICTURES / shown.length))
+        return typeof size === 'string' ? size : strippedPicture($, one.url, root, size, cell, tall, Math.floor(TREE_PICTURES / shown.length))
       })
       // A picture's state: its size and file once every strip is in, else why not.
       const states = pictureStates.map((one, i) => (one === 'failed' || one === 'pending' ? one : sizes[i]! as Exclude<typeof sizes[number], string>))
       const drawn = pictureStates.map(one => (typeof one === 'string' ? null : one))
-      // An image's alt text is its Svg's alone, never a caption under it; Full size shows it in the pane (#105).
+      // An image's alt text is its Svg's alone, never a caption under it; ⛶ shows it in the pane (#105).
       // The height the full view gives a picture: the pane less its back arrow and a margin.
-      const fullTall = Math.max(8, paneRows - 4) * 19
-      // ⤢ under every picture the card draws, so it is always in one place: offered only where the full view drew it
+      const fullTall = fullPictureTall(paneRows)
+      // ⛶ under every picture the card draws, so it is always in one place: offered only where the full view drew it
       // bigger, a wide screenshot never had one and the owner could not find it (#120, 2026-10-30).
       const firstDrawn = drawn.findIndex(one => one !== null && one !== undefined)
-      const fullSize = firstDrawn < 0 ? null : <Button key="full-size" label="⤢" onPress={() => view$(firstDrawn)} />
+      const fullSize = firstDrawn < 0 ? null : <Button key="full-size" label={EXPAND} onPress={() => view$(firstDrawn)} />
       const pictureGrid =
         shown.length === 0 ? null : (
           <Box key="pictures" flexDirection="column" flexShrink={0} gap={1}>
@@ -5541,38 +6148,9 @@ export const register: Register = (on, _options) => {
         )
       // The full view draws the picture at the pane's width, in strips that have the tree's whole budget (#136).
       const fullSizeOf = open === null ? undefined : sizes[open]
-      const fullState = open === null || fullSizeOf === undefined || typeof fullSizeOf === 'string' ? undefined : stripped(shown[open]!.url, fullSizeOf, room, fullTall, TREE_PICTURES)
-      const full =
-        open === null || fullState === undefined || Svg === undefined
-          ? null
-          : (() => {
-              const step = (by: number) => () => view$((open + by + shown.length) % shown.length)
-              return (
-                <Box key="full-picture" flexDirection="column" flexShrink={0} gap={1}>
-                  <Box key="full-nav" flexDirection="row" columnGap={1} alignItems="center">
-                    <Button key="full-back" label="←" onPress={() => view$(null)} />
-                    {shown.length > 1 ? <Button key="full-prev" label="◀" onPress={step(-1)} /> : null}
-                    {shown.length > 1 ? <Button key="full-next" label="▶" onPress={step(1)} /> : null}
-                    <Text key="full-of" dimColor>
-                      {shown.length > 1 ? `${open + 1} of ${shown.length}` : ''}
-                    </Text>
-                  </Box>
-                  {typeof fullState === 'string' ? (
-                    <Text key="full-state" dimColor wrap="wrap">
-                      {fullState === 'pending' ? 'Loading the picture…' : fullState === 'failed' ? 'The picture could not load.' : 'The picture is too large to draw here.'}
-                    </Text>
-                  ) : (
-                    <Box key="full-svg" flexDirection="column">
-                      {fullState.strips.map((strip, k) => (
-                        <Box key={`full-strip-${k}`}>
-                          <Svg source={strip.source} alt={k === 0 ? shown[open]!.alt : ''} width={strip.width} height={strip.height} />
-                        </Box>
-                      ))}
-                    </Box>
-                  )}
-                </Box>
-              )
-            })()
+      const fullState = open === null || fullSizeOf === undefined || typeof fullSizeOf === 'string' ? undefined : strippedPicture($, shown[open]!.url, root, fullSizeOf, room, fullTall, TREE_PICTURES)
+      const full = open === null || fullState === undefined || Svg === undefined ? null
+        : fullPictureView({ Box, Text, Button, Svg }, fullState, shown[open]!.alt, open, shown.length, view$, { back: () => view$(null) })
       // At full size the pane is for looking: the picture and its own ←, no ruling under a picture whose
       // question is off screen (the design review, 2026-10-29).
       if (full !== null) return <Box key="native" flexDirection="column">{full}</Box>

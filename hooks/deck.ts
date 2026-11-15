@@ -2,10 +2,13 @@
 // tool, in the turn it asks, so the deck costs no model call of its own. Pure: the
 // declaration in, a checked decision or what to fix out.
 import type { SessionMessage } from 'claude-code'
-import type { HumanQueueDecision } from '../types'
+import type { HumanQueueArgument, HumanQueueDecision, HumanQueueOptionPage, HumanQueueRests } from '../types'
 
-import { diagramOf, pagesOf, POINTS } from '../panes/visuals/options'
-import { HEADLINE_WORDS, parseDecision } from './reply'
+import { MIN_TEXT_PX } from '../panes/visuals/overflow'
+import { DESIGN_WIDTH, MAX_HEIGHT, PASSIVE, picture } from '../panes/visuals/picture'
+import { shotAsk, unseenIn, type ShotAsk } from '../panes/visuals/shots'
+import { checkSource, type ReadFile } from '../panes/visuals/sources'
+import { HEADLINE_WORDS } from './reply'
 
 export type Decision = HumanQueueDecision
 
@@ -69,8 +72,6 @@ export function decisionOfPermission(tool: string, input: unknown): HumanQueueDe
     headline: line === '' ? `Allow ${name}?` : `Allow ${name}: ${line}?`,
     ask: line === '' ? `Allow ${name} to run?` : `Allow ${name} to run ${line}?`,
     options: ['Allow once', 'Deny'],
-    dimensions: [],
-    cells: [],
     recommend: 0,
     sends: [`Allowed: run that ${name} call again exactly as before.`, `Denied: do not run that ${name} call. Find another way or tell me what you need.`],
     grant: callKey(tool, input),
@@ -122,7 +123,7 @@ export function askOfWrapUp(input: Record<string, unknown>): WrapUpAsk | null {
 export function decisionOfWrapUp(input: Record<string, unknown>): HumanQueueDecision | null {
   const wrap = askOfWrapUp(input)
   if (wrap === null || wrap.actions.length === 0) return null
-  return { headline: wrap.ask, ask: wrap.ask, options: wrap.actions, dimensions: [], cells: [], recommend: 0, sends: wrap.sends }
+  return { headline: wrap.ask, ask: wrap.ask, options: wrap.actions, recommend: 0, sends: wrap.sends }
 }
 
 /**
@@ -162,119 +163,313 @@ export function asButtons<D extends { options: readonly string[] }>(decision: D,
   return { ...decision, options }
 }
 
+/** The words each field of a page holds; one over is refused, never cut (spec 171, cut for the one-pager by spec 176). */
+export const WORDS = { what: 15, claim: 12, excerpt: 20, dependsOn: { on: 8, if: 10 }, risk: 12, fallback: 12, whyNot: 10 } as const
+
+/**
+ * The words that mark a claim about what a person sees (spec 176): its verb, in any inflection, or the surface it names.
+ * Such a claim rests on a shot of that surface or the person's ruling. A heuristic: it misses a visible claim worded
+ * otherwise ("the tab is blue") and catches a few that are not ("the budget fits").
+ */
+export const VISIBLE_WORDS = new Set([
+  'show', 'shows', 'showed', 'shown', 'showing',
+  'draw', 'draws', 'drew', 'drawn', 'drawing',
+  'render', 'renders', 'rendered', 'rendering',
+  'fit', 'fits', 'fitted', 'fitting',
+  'look', 'looks', 'looked', 'looking',
+  'appear', 'appears', 'appeared', 'appearing',
+  'display', 'displays', 'displayed', 'displaying',
+  'desktop', 'pane', 'panes', 'band', 'phone', 'screen', 'screens',
+])
+
+/** The kinds a visible claim may rest on: what the person saw, or what they said. */
+// An estimate or assumption says it is not observed, so it may speak of a surface not built yet; a read or run may not (the spec review).
+const SEEN_KINDS: readonly HumanQueueRests['kind'][] = ['shot', 'ruling', 'estimate', 'assumption']
+
+const STOP_WORDS = new Set(('a an and are as at be but by for from has have i in is it its of on or so than that the then there these this ' +
+  'those to was we were will with you your all each every no not one our they their them what which who how').split(' '))
+/** The words a claim and its picture's text are compared on, each stem to the word first seen: lowercase letters and digits, no stop word, a plural's s and then an ed or ing cut. */
+const contentWords = (text: string): Map<string, string> => {
+  const words = new Map<string, string>()
+  for (const word of text.toLowerCase().match(/[a-z0-9]+/g) ?? []) {
+    const stem = word.length > 3 ? word.replace(/(?<!s)s$/, '').replace(/(ing|ed)$/, '') : word
+    if (!STOP_WORDS.has(word) && !words.has(stem)) words.set(stem, word)
+  }
+  return words
+}
+
+/** A picture's visible text: its style sheets and tags dropped, its entities read as spaces. */
+const pictureText = (html: string) => html.replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]*>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ')
+
+/** Past this share of a picture's words found in its claim, the picture restates it (spec 176)... */
+export const RESTATED_SHARE = 0.6
+/** ...unless it has this many words of its own beyond the claim's. */
+export const OWN_WORDS = 8
+
+const KINDS: readonly HumanQueueRests['kind'][] = ['read', 'run', 'shot', 'ruling', 'estimate', 'assumption']
+
 const SHAPE =
-  '{"headline": string, "ask": string, "options": [string], ' +
-  '"dimensions": [string], "cells": [{"option": string, "dimension": string, "value": string, ' +
-  '"tone": "advantage" | "neutral" | "tradeoff"}], "recommend": string, ' +
-  '"pages": [{"option": string, "what": string, "diagrams": [diagram]}]}'
+  '{"headline": string, "ask": string, "options": [string], "recommend": string, "pages": [{"option": string, ' +
+  '"what": string, "dependsOn"?: {"on": string, "otherwise": string, "if": string}, "arguments": [{"claim": string, ' +
+  `"rests": {"kind": ${KINDS.map(kind => `"${kind}"`).join(' | ')}, "ref"?: string, "excerpt"?: string, ` +
+  '"crop"?: {"x", "y", "w", "h"}, "callout"?: {"x", "y", "label", "side"?: "right" | "left" | "above" | "below"}, "before"?: {"ref", "crop"?}}, ' +
+  '"picture"?: {"html": string, "height": number}}], "risk": string, "fallback"?: string, ' +
+  '"whyNot": [{"option": string, "line": string}] | string}]}'
 
-/** The diagrams a page draws, as the agent reads them (#134): each point, what its title says, and the shapes that draw it. */
-const DIAGRAMS_GUIDE =
-  'A diagram is {"point", "title", "draw", "says"?, "terms"?}. point: "why" (on the recommended option, what makes ' +
-  'it worth doing; on another, why you would pick it), "how" (how it works), "work" (who does the work: the time ' +
-  'it takes you and what falls to the person), "control" (on the recommended option, what you control), "passed" ' +
-  '(on another option, why you did not recommend it) or "risk" (what could go wrong, with its fallback). Put first ' +
-  'the diagram that most decides the choice: the person reads top down, and the pane scrolls to hold every one. ' +
-  'Every option has something that could go wrong, and its page says what and the fallback. title: the point ' +
-  'the diagram makes, led by its kind, the point always said ("Why: today\'s footage stutters", "How: both routes ' +
-  'use the same macOS recorder", "Who does the work: nearly all mine", "What I control: every press, to the frame", ' +
-  '"Why I didn\'t recommend it: the setup falls to you", "What could go wrong: an off-screen window may not ' +
-  'draw"), twelve words or fewer, and the picture shows that point, not another. draw, one shape: {"shape": "bars", "rows": [2 to 4 {"label", "value": ' +
-  'number, "unit"?, "lit"?: true}]} for amounts to compare, every row the point is about lit, this option\'s own row among them, and the rest not, each label saying in plain ' +
-  'words what its amount is, and never for a count of 0 or 1 (a yes or no difference is a route box or a line); ' +
-  '{"shape": "route", "stages": [2 to 5 stages, each [1 to 3 {"name", "note"?, "lit"?: true}]]} for how something ' +
-  'flows or the steps it takes, left to right, alternatives in one stage stacked, lit only where this option\'s path differs from another (a route all ' +
-  'its own lights nothing), a ' +
-  'note explaining a term in its box; {"shape": "work", "rows": [{"who": "me", "minutes": number, "plus"?}, {"who": ' +
-  '"you", "minutes": number, "plus"?}]} for who does the work: your best estimate of each side\'s minutes, never 0 ' +
-  'for a side that has anything to do, plus for what minutes miss ("+ install"); {"shape": "risk", "risks": [1 or 2 ' +
-  '{"risk", "why"?, "fallback"}]} for what could go wrong and what you would do then; {"shape": "lines", "lines": [2 ' +
-  'to 4 {"text"}]} only for what you control, short statements. Every other point is a picture, not lines: a reason ' +
-  'that is a run of steps is a route, one box a step; a reason that is amounts is bars. Leave out a work diagram ' +
-  'where neither side does anything. says: one sentence under the picture with what it shows, only when the ' +
-  'picture alone does not say it. terms: [{"term", "meaning"}] for every word in the diagram a newcomer would stop ' +
-  'on that no note explains, on every page that uses it, since the person may open any tab first. A diagram carries an argument: never a number without what it means or its unit, ' +
-  'never a figure on its own, and each fact once on a page: no diagram restates the sentence on what the option ' +
-  'is or another diagram, a work row\'s plus never repeats a step a route draws, and a measured value is said once, ' +
-  'as measured, never again in words or rounded. One thing has one estimate on every page (a reshoot\'s minutes are ' +
-  'the same wherever it appears), and one name on every page (not "frame rate" on one tab and "pictures a second" on another). ' +
-  'Bars that argue against a yardstick draw the yardstick as a row (what smooth video does beside today\'s takes). At most ' +
-  'twelve words to a line, and no count, term or name from this session (a scene\'s nickname) a newcomer could ' +
-  'not read.'
-
-/** Words a field holds, past which the declaration cuts it (#14: limits are space, never a refusal). */
-const wordCount = (text: string) => text.trim().split(/\s+/).filter(Boolean).length
-const cutWords = (text: string, words: number) => text.trim().split(/\s+/).slice(0, words).join(' ')
-
-/** What the decide tool tells the agent: when to call it, and the shape it takes. */
+/** What the decide tool tells the agent, read on every turn: when to call it, the page shape, and how each field is checked. */
 export const DECIDE_DESCRIPTION =
   'Show the person the decision you are asking them to make, in the Decision pane the band\'s reply row opens. Call it ' +
-  'once in any turn whose reply asks the person to choose between options or approve a step, before you end the turn, ' +
-  'with the same options you offer in your reply or end-of-turn box. It costs no model call: you write it, nothing ' +
-  `runs after you. The input is ${SHAPE}. headline: the question your options answer, in plain words a newcomer ` +
-  'reads, twelve words or fewer, naming no technical term; with three options, or two that are not a yes and a no, ' +
-  'it asks which, never "Should I ...?". ask: the same question in one sentence. options: the two or three you offer, ' +
-  'as short imperative labels, the same words as your end-of-turn buttons when you use them (the box holds two, so ' +
-  'a third option needs no button). Call this before the end-of-turn box. dimensions: two or three ' +
-  'questions that tell them apart. One cell for every option and dimension: a value of three words or fewer, tone ' +
-  'advantage (good), neutral (middling) or tradeoff (bad). recommend: one option, exactly as written. pages: one for ' +
-  'every option, its option written exactly as in options. The person reads each page on its own tab and is not a ' +
-  'specialist in this field: write in plain words. what: one sentence on what the option is, for someone who has ' +
-  'never heard of it. diagrams: 1 to 5, only those that carry an argument. ' + DIAGRAMS_GUIDE + ' Use only what you ' +
-  'know from this session or checked with your tools; a guess says so ("untested"). A field over its words is cut ' +
-  'to fit; a broken structure is refused with what to fix, and the pane shows nothing until a call passes.'
+  'once in any turn whose reply asks the person to choose between options or approve a step, before you end the turn ' +
+  `and before the end-of-turn box, with the options you offer there. It costs no model call. The input is ${SHAPE}. ` +
+  `headline: the question your options answer, in plain words, ${HEADLINE_WORDS} words or fewer, no technical term; ` +
+  'with three options, or two that are not a yes and a no, it asks which, never "Should I ...?". ask: the same ' +
+  'question in one sentence. options: the two or three you offer, short imperative labels, in your end-of-turn ' +
+  'buttons\' words (the box holds two). recommend: one option, exactly as written. pages: one per option, its option ' +
+  'as in options. The person opens the recommended page first and mostly decides there, so it carries the whole case. ' +
+  `what: one sentence (${WORDS.what} words) on what the option is, for a newcomer. dependsOn, on the recommended page ` +
+  'only: the fact the call hinges on, read "This depends on {on}; choose {otherwise} instead if {if}", otherwise ' +
+  `another option, on ${WORDS.dependsOn.on} words and if ${WORDS.dependsOn.if}. arguments: 1 to 4, strongest first, an observed source ahead of ` +
+  'an estimate or assumption; argue every option as ' +
+  'strongly as you honestly can, so its tab is a real second opinion (a "leave it" option may state its consequence ' +
+  `in one). claim: ${WORDS.claim} words. A claim about what a person sees (its verb shows, draws, renders, fits, ` +
+  'looks, appears or displays, or it names the desktop, the pane, the band, the phone or the screen) rests on a ' +
+  '"shot" of that surface or a "ruling"; a read or run is refused as proof of what a person sees. ' +
+  'rests is checked against this session; cite only what it read or ran: ' +
+  '"read" gives ref "path:12" or "path:12-18" of a file one of your tool calls opened, and its excerpt copied exactly ' +
+  'from those lines as the file reads now; "run" gives an excerpt exactly as one of your tool results printed it, and ' +
+  'ref naming the script or file it ran as a reader would know it (scripts/land.sh, not cat); "shot" gives ref, ' +
+  'the path of an image file this session captured or read (never image data), with crop and callout in its ' +
+  'pixels, the callout\'s label 4 words and its side the side of the point with empty space ("right" for a word at the end of a tab row; absent, above-right), the point then on that edge of what it marks (the right end of a word for "right") so the ring never covers it, and before, a fix\'s failing state at the same crop size; of a shot ' +
+  'scripts/desktop-shot.sh took, cite its <out>@2x.png, the full-resolution file, whose type draws sharp, never the ' +
+  'halved <out>.png; "ruling" quotes the person\'s own words from this session or a "## Rulings" comment you ' +
+  `read, its ref the issue it was ruled on ("issue 171") when there is one; "estimate" and "assumption" need no source and are shown as such. A shot with before needs a callout on the After marking what changed. excerpt: ${WORDS.excerpt} words. ` +
+  'Show rather than tell. An argument\'s exhibit, a shot or a picture, draws right under its claim. An argument earns an ' +
+  'exhibit only when the reader must relate things: name what the eye reads off it that the claim cannot (where, ' +
+  'which, how much, how it is spread), and if nothing, the claim stays a sentence. The content picks the form: a ' +
+  'visible claim, a shot of that surface cropped to the part it names, with before for a fix; options that differ, ' +
+  'the same small drawing on each page with the difference marked; a sequence, boxes and arrows with a verb on each ' +
+  'arrow; 2 to 5 values, bars from zero with one highlighted; change over time, a line; one number, bold in the claim ' +
+  'with no picture; command output, a "run" excerpt with no drawing. A picture whose text mostly repeats its claim ' +
+  `is refused. picture: an HTML fragment laid out ` +
+  `${DESIGN_WIDTH} CSS pixels wide at the height you state (at most ${MAX_HEIGHT}), text no smaller than ${MIN_TEXT_PX}px, well-formed, of these elements ` +
+  `only: ${[...PASSIVE].join(', ')}; no event handler, no image file, nothing loaded from outside it. It draws ` +
+  `indented under its claim, ${DESIGN_WIDTH} wide or less, its type beside the pane's 13px text, so set each value ` +
+  `left-aligned beside its label, never pushed to a right edge: draw in the desktop's neutrals with at most one ` +
+  `accent, labels in the desktop's dim grey, bold only the one figure the claim rests on, and no amber frame or ` +
+  `green fill, which the pane keeps for a warning and the recommendation. risk: what could go wrong (${WORDS.risk} words); fallback: what you would do then ` +
+  `(${WORDS.fallback}). whyNot: on the recommended page [{"option", "line"}], a line per other option on why it lost; ` +
+  `elsewhere one line on why this option was not recommended (${WORDS.whyNot} words a line). A field over its words, ` +
+  'a source that does not hold or a picture that breaks a rule is refused, each named, and nothing shows until a ' +
+  'call passes. The pane holds the case: your reply states the ask in a sentence and does not repeat the arguments.'
 
-/** A declaration the pane can draw, with any field cut to its room; or what to fix, when its structure is broken. */
-export type Declared = { decision: Decision; cut: string[] } | { refused: string[] }
+/** A declaration the pane can draw; or every field to fix, each by its path. */
+export type Declared = { decision: Decision } | { refused: string[] }
 
-/** The decide tool's input as a decision (issue 167): fields over their room are cut, a broken structure is refused, every option needs a page whose every diagram draws. */
-export function declared(input: Record<string, unknown>): Declared {
-  const cut: string[] = []
-  const fit = (value: unknown, words: number, name: string): unknown => {
-    if (typeof value !== 'string' || wordCount(value) <= words) return value
-    cut.push(`${name} cut to ${words} words`)
-    return cutWords(value, words)
+/** Cuts and encodes one shot (hooks/shots.ts, spec 176): the shot, or every reason it cannot be, named under `at`. */
+export type ShotEncode = (ask: ShotAsk, at: string) => Promise<{ shot: NonNullable<HumanQueueRests['shot']> } | { refused: string[] }>
+
+/** Where a shot's relative path resolves, and how it is encoded; a caller with none refuses every shot. */
+export type Shots = { cwd: string; encode: ShotEncode }
+
+/** What each argument's source is checked against: the session, the files as they read now, and the shot encoder. */
+type Against = { messages: readonly SessionMessage[]; read: ReadFile; shots?: Shots; encoding: Promise<string[]>[] }
+
+const object = (value: unknown): Record<string, unknown> | null =>
+  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null
+
+/** A field's text as drawn: trimmed, its spaces collapsed; null when it is not text or holds none. */
+const line = (value: unknown): string | null => {
+  const text = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : ''
+  return text === '' ? null : text
+}
+
+const wordCount = (text: string) => text.split(' ').length
+
+/** An option as a page names it: no case, no edge spaces. */
+const sameOption = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase()
+
+/** Records every refusal of one declaration, and reads its text fields against their word limits. */
+class Refusals {
+  readonly all: string[] = []
+  add(path: string, why: string): null {
+    this.all.push(`${path}: ${why}`)
+    return null
   }
-  const raw: Record<string, unknown> = { ...input, headline: fit(input.headline, HEADLINE_WORDS, 'headline') }
-  if (typeof input.ask === 'string') {
-    const first = input.ask.trim().split(/(?<=[.!?])\s+/)[0]
-    if (first !== input.ask.trim()) cut.push('ask cut to its first sentence')
-    raw.ask = first
+  /** The field's text when it holds `words` or fewer; null, with the reason recorded at `path`, when not. */
+  text(value: unknown, words: number, path: string, what: string): string | null {
+    const said = line(value)
+    if (said === null) return this.add(path, `${what}, ${words} words or fewer`)
+    return wordCount(said) > words ? this.add(path, `${wordCount(said)} words, over its ${words}: ${what}`) : said
   }
-  if (Array.isArray(input.cells)) {
-    raw.cells = input.cells.map((cell, i) =>
-      typeof cell === 'object' && cell !== null ? { ...cell, value: fit((cell as Record<string, unknown>).value, 3, `cells[${i}].value`) } : cell)
+  sentence(said: string | null, path: string): string | null {
+    // A sentence ends at . ! or ? before a capital, a digit or a quote: a mark mid-sentence (an amber !) is no end.
+    const count = said?.split(/(?<=[.!?])\s+(?=[A-Z0-9"“‘'(])/).length ?? 1
+    return count === 1 ? said : this.add(path, `one sentence, not ${count}`)
   }
-  const decision = parseDecision(raw)
-  if (decision === null) {
-    const refused: string[] = []
-    const strings = (value: unknown) => Array.isArray(value) ? value.filter(one => typeof one === 'string' && one.trim() !== '') : []
-    if (typeof raw.headline !== 'string' || raw.headline.trim() === '') refused.push('headline: the question, twelve words or fewer')
-    if (typeof raw.ask !== 'string' || raw.ask.trim() === '') refused.push('ask: the question in one sentence')
-    const options = strings(raw.options)
-    if (options.length < 2 || options.length > 3 || new Set(options).size !== options.length) refused.push('options: two or three different labels')
-    const dimensions = strings(raw.dimensions)
-    if (dimensions.length < 2 || dimensions.length > 3 || new Set(dimensions).size !== dimensions.length) refused.push('dimensions: two or three different questions')
-    if (!options.includes(typeof raw.recommend === 'string' ? raw.recommend.trim() : '')) refused.push('recommend: one of options, exactly as written')
-    if (refused.length === 0) refused.push('cells: exactly one {option, dimension, value, tone} for every option and dimension, each named exactly as in options and dimensions, tone advantage, neutral or tradeoff')
-    return { refused }
+}
+
+/**
+ * The decide tool's input as a decision (spec 171): every field checked, each argument's source against this session's
+ * `messages` and the files as `read` returns them now, each picture through the picture module. Nothing is cut: every
+ * failure comes back at once, named by its path, and the agent mends it in its own turn.
+ */
+export async function declared(input: Record<string, unknown>, messages: readonly SessionMessage[], read: ReadFile, shots?: Shots): Promise<Declared> {
+  const no = new Refusals()
+  const against: Against = { messages, read, ...(shots ? { shots } : {}), encoding: [] }
+  const headline = no.text(input.headline, HEADLINE_WORDS, 'headline', 'the question the options answer')
+  const ask = line(input.ask) === null ? no.add('ask', 'the question in one sentence') : no.sentence(line(input.ask), 'ask')
+  const given = Array.isArray(input.options) ? input.options.map(line) : []
+  const options = given.filter((one): one is string => one !== null)
+  if (options.length !== given.length || options.length < 2 || options.length > 3 || new Set(options.map(one => one.toLowerCase())).size !== options.length) {
+    no.add('options', 'two or three different labels')
   }
-  const given = Array.isArray(input.pages) ? input.pages : []
-  const refused: string[] = []
-  decision.options.forEach(option => {
-    const page = given.find(one => typeof one === 'object' && one !== null && typeof (one as Record<string, unknown>).option === 'string' &&
-      ((one as Record<string, unknown>).option as string).trim().toLowerCase() === option.trim().toLowerCase()) as Record<string, unknown> | undefined
-    if (page === undefined) return void refused.push(`pages: no page for "${option}"`)
-    if (typeof page.what !== 'string' || page.what.trim() === '') refused.push(`pages["${option}"].what: one sentence on what the option is`)
-    const diagrams = Array.isArray(page.diagrams) ? page.diagrams : []
-    if (diagrams.length === 0) refused.push(`pages["${option}"].diagrams: at least one`)
-    diagrams.forEach((one, i) => {
-      if (diagramOf(one) === null) refused.push(`pages["${option}"].diagrams[${i}]: needs a point (${POINTS.join(', ')}), a title, and a draw of one shape with every field it needs`)
-    })
+  const recommend = options.indexOf(line(input.recommend) ?? '')
+  if (recommend < 0) no.add('recommend', 'one of options, exactly as written')
+  if (no.all.length > 0) return { refused: no.all }
+
+  const raw = Array.isArray(input.pages) ? input.pages.map(object) : []
+  if (!Array.isArray(input.pages) || raw.some(one => one === null)) return { refused: ['pages: one {option, what, arguments, risk, whyNot} object per option'] }
+  for (const page of raw) {
+    const named = line(page!.option) ?? ''
+    if (!options.some(option => sameOption(option, named))) no.add('pages', `"${named}" is not one of options`)
+  }
+  const pages: HumanQueueOptionPage[] = []
+  for (const [i, option] of options.entries()) {
+    const found = raw.filter(one => sameOption(line(one!.option) ?? '', option))
+    if (found.length !== 1) no.add('pages', found.length === 0 ? `no page for "${option}"` : `${found.length} pages for "${option}", one only`)
+    else {
+      const page = await pageOf(found[0]!, `pages["${option}"]`, { options, i, recommend }, against, no)
+      if (page !== null) pages.push(page)
+    }
+  }
+  // Every shot cuts and encodes at once; each fills its argument's source, or its reasons follow the fields', in order.
+  for (const reasons of await Promise.all(against.encoding)) no.all.push(...reasons)
+  if (no.all.length > 0) return { refused: [...new Set(no.all)] }
+  return { decision: { headline: headline!, ask: ask!, options, recommend, pages } }
+}
+
+/** One option's page, checked: null when any field of it is refused, each recorded at its path. */
+async function pageOf(
+  page: Record<string, unknown>,
+  at: string,
+  { options, i, recommend }: { options: readonly string[]; i: number; recommend: number },
+  against: Against,
+  no: Refusals,
+): Promise<HumanQueueOptionPage | null> {
+  const before = no.all.length
+  const others = options.flatMap((label, j) => (j === i ? [] : [{ label, j }]))
+  const otherIndex = (value: unknown) => others.find(one => sameOption(one.label, line(value) ?? ''))?.j ?? -1
+
+  const what = no.sentence(no.text(page.what, WORDS.what, `${at}.what`, 'one sentence on what the option is'), `${at}.what`)
+  const given = Array.isArray(page.arguments) ? page.arguments : []
+  if (given.length < 1 || given.length > 4) no.add(`${at}.arguments`, '1 to 4 arguments, the strongest first')
+  const argued: HumanQueueArgument[] = []
+  for (const [n, one] of given.slice(0, 4).entries()) {
+    const where = `${at}.arguments[${n}]`
+    const argument = object(one)
+    if (argument === null) {
+      no.add(where, '{claim, rests, picture?}')
+      continue
+    }
+    const claim = no.text(argument.claim, WORDS.claim, `${where}.claim`, 'the claim')
+    const rests = await restsOf(argument.rests, `${where}.rests`, against, no)
+    const kind = object(argument.rests)?.kind
+    const seen = (claim?.toLowerCase().match(/[a-z]+/g) ?? []).filter(word => VISIBLE_WORDS.has(word))
+    if (seen.length > 0 && KINDS.includes(kind as HumanQueueRests['kind']) && !SEEN_KINDS.includes(kind as HumanQueueRests['kind'])) {
+      no.add(`${where}.rests`, `the claim is about what a person sees ("${seen[0]}"), so a ${String(kind)} cannot prove it: rest it on a shot of that surface, or the person's ruling`)
+    }
+    const drawn = argument.picture === undefined ? undefined : pictureOf(argument.picture, `${where}.picture`, no, claim)
+    if (claim !== null && rests !== null && drawn !== null) argued.push({ claim, rests, ...(drawn === undefined ? {} : { picture: drawn }) })
+  }
+  const risk = no.text(page.risk, WORDS.risk, `${at}.risk`, 'what could go wrong')
+  const fallback = page.fallback === undefined ? undefined : no.text(page.fallback, WORDS.fallback, `${at}.fallback`, 'what you would do then')
+  const head = { what: what!, arguments: argued, risk: risk!, ...(fallback == null ? {} : { fallback }) }
+
+  if (i !== recommend) {
+    if (page.dependsOn !== undefined) no.add(`${at}.dependsOn`, 'only the recommended page says what the call depends on')
+    const whyNot = no.text(page.whyNot, WORDS.whyNot, `${at}.whyNot`, 'one line on why this option was not recommended')
+    return no.all.length > before ? null : { ...head, whyNot: whyNot! }
+  }
+
+  const depends = object(page.dependsOn)
+  if (depends === null) no.add(`${at}.dependsOn`, 'the recommended page says what the call depends on, {on, otherwise, if}')
+  const on = depends === null ? null : no.text(depends.on, WORDS.dependsOn.on, `${at}.dependsOn.on`, 'what the call hinges on')
+  const when = depends === null ? null : no.text(depends.if, WORDS.dependsOn.if, `${at}.dependsOn.if`, 'when to choose the other option instead')
+  const otherwise = depends === null ? -1 : otherIndex(depends.otherwise)
+  if (depends !== null && otherwise < 0) no.add(`${at}.dependsOn.otherwise`, 'another of options, exactly as written')
+
+  const lines = Array.isArray(page.whyNot) ? page.whyNot.map(object) : null
+  if (lines === null || lines.some(one => one === null)) {
+    no.add(`${at}.whyNot`, '[{option, line}], a line for each other option')
+    return null
+  }
+  for (const one of lines) if (otherIndex(one!.option) < 0) no.add(`${at}.whyNot`, `"${line(one!.option) ?? ''}" is not another of options`)
+  const whyNot = others.map(({ label, j }) => {
+    const hits = lines.filter(one => sameOption(line(one!.option) ?? '', label))
+    if (hits.length !== 1) return no.add(`${at}.whyNot`, `one line for "${label}"`)
+    const said = no.text(hits[0]!.line, WORDS.whyNot, `${at}.whyNot["${label}"]`, `why not ${label}`)
+    return said === null ? null : { option: j, line: said }
   })
-  if (refused.length > 0) return { refused }
-  const pages = pagesOf(given, decision.options)
-  return { decision: pages === undefined ? decision : { ...decision, pages }, cut }
+  if (no.all.length > before) return null
+  return { ...head, dependsOn: { on: on!, otherwise, if: when! }, whyNot: whyNot as { option: number; line: string }[] }
+}
+
+/** An argument's source, checked against the session; null, with the reason recorded, when it does not hold. */
+async function restsOf(value: unknown, path: string, against: Against, no: Refusals): Promise<HumanQueueRests | null> {
+  const given = object(value)
+  const kind = KINDS.find(one => one === given?.kind)
+  if (given === null || kind === undefined) return no.add(path, `{kind, ref?, excerpt?}, kind one of ${KINDS.join(', ')}`)
+  const ref = line(given.ref)
+  const excerpt = given.excerpt === undefined ? undefined : no.text(given.excerpt, WORDS.excerpt, `${path}.excerpt`, 'the words it rests on')
+  if (excerpt === null) return null
+  if (kind === 'shot') return shotOf(given, path, excerpt, against, no)
+  const rests = { kind, ...(ref === null ? {} : { ref }), ...(excerpt === undefined ? {} : { excerpt }) }
+  const held = await checkSource(rests, against.messages, against.read)
+  if (!held.ok) return no.add(path, held.reason)
+  // A read under the session's folder is stored relative to it, so the tag reads hooks/deck.ts:12, not a home path (the design review, round 5).
+  const root = (against.shots?.cwd ?? '').replace(/\/+$/, '') + '/'
+  return kind === 'read' && root !== '/' && rests.ref !== undefined && rests.ref.startsWith(root) ? { ...rests, ref: rests.ref.slice(root.length) } : rests
+}
+
+/**
+ * A shot source (spec 176), checked against the session at once; its cut and encode start here and finish before
+ * `declared` answers, filling `shot` on the source returned, or recording why not.
+ */
+function shotOf(given: Record<string, unknown>, path: string, excerpt: string | undefined, against: Against, no: Refusals): HumanQueueRests | null {
+  if (against.shots === undefined) return no.add(path, 'a shot cannot be encoded here')
+  const asked = shotAsk(given, path, against.shots.cwd)
+  const wrong = 'refused' in asked ? asked.refused : unseenIn(asked.ask, against.messages, path)
+  if ('refused' in asked || wrong.length > 0) {
+    no.all.push(...wrong)
+    return null
+  }
+  const rests: HumanQueueRests = { kind: 'shot', ref: asked.ask.file, ...(excerpt === undefined ? {} : { excerpt }) }
+  against.encoding.push(against.shots.encode(asked.ask, path).then(out => {
+    if ('refused' in out) return out.refused
+    rests.shot = out.shot
+    return []
+  }))
+  return rests
+}
+
+/** An argument's picture, checked by the picture module at its design width; null, with every reason recorded, when refused. */
+function pictureOf(value: unknown, path: string, no: Refusals, claim: string | null): { html: string; height: number } | null {
+  const given = object(value)
+  if (given === null || typeof given.html !== 'string' || typeof given.height !== 'number') {
+    return no.add(path, `{html, height}, an HTML fragment and its height in CSS pixels at ${DESIGN_WIDTH} wide`)
+  }
+  const spec = { html: given.html, height: given.height }
+  // A picture that says its claim again shows nothing the claim does not (spec 176): most of its words are the claim's,
+  // and too few are its own to carry where, which or how much.
+  const words = contentWords(pictureText(spec.html))
+  const claimed = claim === null ? new Map<string, string>() : contentWords(claim)
+  const shared = [...words.keys()].filter(word => claimed.has(word))
+  const restated = words.size > 0 && shared.length / words.size >= RESTATED_SHARE && words.size - shared.length < OWN_WORDS
+  if (restated) no.add(path, `its text repeats its claim (${shared.map(word => words.get(word)).join(', ')}): draw what the claim cannot say (where, which, how much, how it is spread), or drop the picture`)
+  const drawn = picture(spec, DESIGN_WIDTH)
+  if (!('refused' in drawn)) return restated ? null : spec
+  for (const reason of drawn.refused) no.add(path, reason)
+  return null
 }
 
 /**
@@ -311,8 +506,6 @@ export function decisionOfQuestions(questions: unknown): HumanQueueDecision | nu
     headline: head,
     ask: question.trim(),
     options: bare,
-    dimensions: [],
-    cells: [],
     recommend: Math.max(0, labels.findIndex(label => recommended.test(label!))),
     sends: bare,
   }

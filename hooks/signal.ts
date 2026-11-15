@@ -34,8 +34,13 @@ export const QUIET = '#898781'
 /** The app's own merged purple, its `merged` theme key as the desktop draws it: a merged pull request (docs/palette.md). */
 export const MERGED = '#b796ff'
 
-/** The theme's `inactive`, which `dimColor` draws: the band's own labels, a step under white (docs/palette.md). */
+/** The theme's `inactive`: the band's own labels, a step under white (docs/palette.md). */
 export const INACTIVE = '#c3c2b7'
+/**
+ * What a `dimColor` Text draws on a pane's ground, as a shot of the Decision pane read it (0.282.0, 2026-11-14): the
+ * kind line beside a claim's tag. A picture's dim words take it, so they sit at the same step as the pane's own.
+ */
+export const DIM_TEXT = '#9c9c9c'
 /** The band's ground, sampled off the app: a label's halo in a picture drawn on it (ADR 0046). */
 export const BAND = '#262625'
 

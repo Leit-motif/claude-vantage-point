@@ -134,7 +134,7 @@ export type ComposedInput = {
   newProps: boolean
   /** The item's own images, drawn after the tiles; each takes one of the card's two pictures. */
   images?: { count: number; node: RenderElement } | null
-  /** A control that sits beside Full text, as the images' Full size does. */
+  /** A control that sits beside Full text, as the images' ⛶ does. */
   beside?: RenderElement | null
 }
 

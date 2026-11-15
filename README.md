@@ -147,7 +147,7 @@ The queue opens on an overview of every ask, grouped by repository. On a card:
 | ◀ / ▶ | Back to an earlier item, or on to the next |
 | ⏎ | Submit, in ▶'s place on the last item; white once every item is ruled |
 | **Comment** | Opens a field under it. Enter or Save keeps the comment, Cancel drops it |
-| 📄 / ⤢ | The item's full text, or a picture at full size |
+| 📄 / ⛶ | The item's full text, or a picture at full size |
 | ← | Back to the overview, where Undo takes back what you last did, and Redo puts it back |
 
 A pair item shows two outputs in a blind order, ruled A, B or Same.

@@ -17,7 +17,8 @@ export type Fetch =
   | { kind: 'contents'; repo: string; tries: { ref: string; path: string }[] }
   | { kind: 'attachment'; url: string }
   | { kind: 'web'; url: string }
-  | { kind: 'file'; path: string }
+  /** A path on disk; `wide` the most pixels across its cached copy keeps, past FETCH_SCRIPT's 1280 (a 2x shot's frame, spec 176). */
+  | { kind: 'file'; path: string; wide?: number }
 
 const MARKDOWN = /!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g
 const HTML = /<img\b[^>]*>/gi
@@ -124,9 +125,10 @@ export const PICTURE_MAX = 120_000
  * A plain Svg holding one PNG, JPEG or AVIF as a data URI, at `width` by `height`,
  * or null when it would pass SVG_MAX, since the desktop would then draw nothing in
  * the pane. One `href` only: the desktop draws it (docs/palette.md), and a second
- * copy in `xlink:href` halved what a picture could hold.
+ * copy in `xlink:href` halved what a picture could hold. `overlay` is markup drawn
+ * over the image in the same Svg: a shot's callout or its crop's outline (spec 176).
  */
-export function pictureSvg(base64: string, width: number, height: number): string | null {
+export function pictureSvg(base64: string, width: number, height: number, overlay = ''): string | null {
   // An AVIF opens with a box size, then `ftypavif`, which base64 spells from the sixth character on.
   // Windows draws a GIF or WebP as fetched (issue 152), which only its bytes 0 and 8 tell apart.
   const webp = base64.startsWith('UklGR') && String.fromCharCode(...bytesOf(base64, 16).subarray(8, 12)) === 'WEBP'
@@ -134,7 +136,7 @@ export function pictureSvg(base64: string, width: number, height: number): strin
   const uri = `data:image/${type};base64,${base64}`
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
-    `<image width="${width}" height="${height}" preserveAspectRatio="none" href="${uri}"/>` +
+    `<image width="${width}" height="${height}" preserveAspectRatio="none" href="${uri}"/>${overlay}` +
     '</svg>'
   return svg.length > SVG_MAX ? null : svg
 }
@@ -189,7 +191,8 @@ export function fetchArgs(fetch: Fetch, strip: Strip = { top: 0, rows: 0, most: 
   if (fetch.kind === 'contents') {
     return [...at, 'contents', ...fetch.tries.map(one => `repos/${fetch.repo}/contents/${one.path.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(one.ref)}`)]
   }
-  return [...at, fetch.kind, fetch.kind === 'file' ? fetch.path : fetch.url]
+  if (fetch.kind === 'file') return [...at, 'file', fetch.path, ...(fetch.wide === undefined ? [] : [String(fetch.wide)])]
+  return [...at, fetch.kind, fetch.url]
 }
 
 
@@ -204,7 +207,8 @@ const FETCH_INTO = `  case $kind in
 
 /**
  * Fetches one picture into the cache once, as a PNG at most 1280px wide (a pane at
- * 2x needs about 1200), and prints its file, width and height, then the base64 of
+ * 2x needs about 1200), or a file at most the `wide` given after its path (a 2x shot's
+ * whole frame at twice an expanded pane's points, spec 176), and prints its file, width and height, then the base64 of
  * one strip of it: rows `top` to `top + rows` of that PNG, the whole of it when `rows`
  * is 0, in a copy of at most `most` characters. With `rows` -1 it prints only the
  * first three lines, so the caller can cut its strips (#136). The copy is the first
@@ -213,12 +217,13 @@ const FETCH_INTO = `  case $kind in
  * as wide. Each AVIF is encoded from a copy cropped to even sides: sips tiles a
  * picture wider than 512px into a grid, and Chromium paints a grid with an odd side
  * fully transparent (#130). `$1` is the cache name, `$2` to `$4` the strip's top,
- * rows and most, `$5` the kind, the rest its arguments. The gh token stays inside the
+ * rows and most, `$5` the kind, the rest its arguments: a file's path and its `wide`. The gh token stays inside the
  * shell.
  */
 export const FETCH_SCRIPT = `set -u
 dir="$HOME/Library/Caches/vantage-point/pictures"
 name=$1; top=$2; rows=$3; most=$4; kind=$5; shift 5
+wide=1280; [ "$kind" = file ] && [ $# -ge 2 ] && wide=$2
 out="$dir/$name.full.png"
 view="$dir/$name.strip-$top-$rows-$most.copy"
 mkdir -p "$dir" || exit 3
@@ -230,7 +235,7 @@ if [ ! -s "$out" ]; then
 ${FETCH_INTO}  if [ $ok -ne 0 ] || ! sips -s format png "$tmp" --out "$out" >/dev/null 2>&1; then rm -f "$tmp" "$out"; exit 4; fi
   rm -f "$tmp"
   set -- $(size "$out")
-  if [ "$1" -gt 1280 ]; then sips --resampleWidth 1280 "$out" >/dev/null 2>&1; fi
+  if [ "$1" -gt "$wide" ]; then sips --resampleWidth "$wide" "$out" >/dev/null 2>&1; fi
 fi
 set -- $(size "$out"); w=$1; h=$2
 echo "$out"
@@ -327,6 +332,67 @@ function plainOf(stdout: string): Loaded | null {
   if (file === undefined || file === '' || base64 === undefined || !/^[A-Za-z0-9+/]+=*$/.test(base64)) return null
   const header = headerOfBase64(base64)
   return header === null ? null : { file, width: header.width, height: header.height, base64 }
+}
+
+/**
+ * Cuts one screenshot a decision rests on (spec 176), on macOS, before FETCH_SCRIPT encodes each
+ * part: it prints the file's width and height, then writes the crop, exactly, and a copy of the
+ * whole `fw` pixels wide (none when `fw` is 0), each once, and prints their paths. sips crops from
+ * the centre when a crop starts on the first row and not at all when it ends on the last (#136),
+ * so the crop is cut from a copy padded by a pixel on every side. Each part is written beside its
+ * final name and moved there, so two runs of one shot never read a half-written file. Exit 4 when
+ * the file is no image, 5 (after the size) when the crop runs past it. `$1` is the folder, `$2` the
+ * name, `$3` the file, `$4` the frame's width, `$5` to `$8` the crop's x, y, w and h, absent for
+ * the whole file.
+ */
+export const CUT_SCRIPT = `set -u
+dir=$1; name=$2; src=$3; fw=$4; cx=\${5:-}; cy=\${6:-}; cw=\${7:-}; ch=\${8:-}
+mkdir -p "$dir" || exit 3
+[ -s "$src" ] || exit 4
+tmp="$dir/.$name.$$.png"
+png="$dir/$name.png"
+if [ ! -s "$png" ]; then
+  sips -s format png "$src" --out "$tmp" >/dev/null 2>&1 && mv "$tmp" "$png" || { rm -f "$tmp"; exit 4; }
+fi
+set -- $(sips -g pixelWidth -g pixelHeight "$png" | awk '/pixelWidth/{w=$2} /pixelHeight/{h=$2} END{print w, h}')
+w=$1; h=$2
+echo "$w"
+echo "$h"
+part=$png
+if [ -n "$cw" ]; then
+  [ $((cx + cw)) -le "$w" ] && [ $((cy + ch)) -le "$h" ] || exit 5
+  part="$dir/$name.crop-$cx-$cy-$cw-$ch.png"
+  if [ ! -s "$part" ]; then
+    pad="$dir/.$name.$$.pad.png"
+    sips --padToHeightWidth $((h + 2)) $((w + 2)) "$png" --out "$pad" >/dev/null 2>&1 &&
+      sips -c "$ch" "$cw" --cropOffset $((cy + 1)) $((cx + 1)) "$pad" --out "$tmp" >/dev/null 2>&1 && mv "$tmp" "$part"
+    ok=$?; rm -f "$pad" "$tmp"; [ $ok -eq 0 ] || exit 3
+  fi
+fi
+echo "$part"
+[ "$fw" -gt 0 ] || exit 0
+frame="$dir/$name.frame-$fw.png"
+if [ ! -s "$frame" ]; then
+  if [ "$w" -gt "$fw" ]; then sips --resampleWidth "$fw" "$png" --out "$tmp" >/dev/null 2>&1 && mv "$tmp" "$frame"
+  else cp "$png" "$tmp" && mv "$tmp" "$frame"; fi || { rm -f "$tmp"; exit 3; }
+fi
+echo "$frame"
+`
+
+/** The argv that cuts one shot on `host`: macOS only, since only sips crops (the plain script on Windows never converts). */
+export function cutArgv(host: Host, name: string, file: string, frameWidth: number, crop?: { x: number; y: number; w: number; h: number }): string[] | null {
+  if (host.os !== 'macos' || host.cache === null) return null
+  const at = crop === undefined ? [] : [crop.x, crop.y, crop.w, crop.h].map(String)
+  return shArgv(host, CUT_SCRIPT, `${host.cache}/shots`, name, file, String(frameWidth), ...at)
+}
+
+/** CUT_SCRIPT's output: the file's size, then the crop's path and the frame's, each once printed. */
+export function cutOf(stdout: string): { width: number; height: number; part?: string; frame?: string } | null {
+  const [width, height, part, frame] = stdout.split('\n')
+  const w = Number(width)
+  const h = Number(height)
+  if (!(w > 0) || !(h > 0)) return null
+  return { width: w, height: h, ...(part ? { part } : {}), ...(frame ? { frame } : {}) }
 }
 
 /** A size run's output, by the script that printed it. */
