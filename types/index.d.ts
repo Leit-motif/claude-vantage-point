@@ -241,7 +241,7 @@ export type HumanQueueShot = {
  */
 export type HumanQueueRests = { kind: 'read' | 'run' | 'shot' | 'ruling' | 'estimate' | 'assumption'; ref?: string; excerpt?: string; shot?: HumanQueueShot }
 /** One supporting argument: its claim, what it rests on, and a picture where one carries it (an HTML fragment at the design width). */
-export type HumanQueueArgument = { claim: string; rests: HumanQueueRests; picture?: { html: string; height: number } }
+export type HumanQueueArgument = { claim: string; rests: HumanQueueRests; picture?: { html: string; height: number }; exemplar?: string }
 /** What the recommendation depends on: "This depends on {on}; choose {otherwise} instead if {if}", `otherwise` an option index. */
 export type HumanQueueDependsOn = { on: string; otherwise: number; if: string }
 /**

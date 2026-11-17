@@ -96,15 +96,6 @@ export function shotLabel(one: Pick<ShotFile, 'file' | 'build' | 'at'>, which?: 
   return [which, one.build, fileName(one.file), time].filter(part => part !== undefined).join(' · ')
 }
 
-/** The Sources tab's groups, in the order they draw. */
-export const GROUPS = [
-  { label: 'Shots', kinds: ['shot'] },
-  { label: 'Runs', kinds: ['run'] },
-  { label: 'Reads', kinds: ['read'] },
-  { label: 'Your rulings', kinds: ['ruling'] },
-  { label: 'Estimates and assumptions', kinds: ['estimate', 'assumption'] },
-] as const satisfies readonly { label: string; kinds: readonly HumanQueueRests['kind'][] }[]
-
 /** One image file of a shot: the After, or a fix's Before, with what its own sidecar recorded and when it was written. */
 export type ShotFile = Pick<HumanQueueShot, 'file' | 'surface' | 'build' | 'commit' | 'crop' | 'size' | 'scale' | 'frame'> & { at?: number }
 

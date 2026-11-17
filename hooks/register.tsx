@@ -94,7 +94,7 @@ import { isTodo, todoMoves, todoOf } from '../panes/human-queue/todo'
 import { todoBodyProps, todoCard, todoFallback, type TodoCard } from './todo-card'
 import { agentPill, youPill, freshCount, freshPill, staleCount, readSpecProgress, waitingTotal, NEW_ASK_MS } from './band'
 import type { CountObservation } from './band'
-import { asButtons, boxlessWrapUp, callKey, DECIDE_DESCRIPTION, declared, decisionOfPermission, decisionOfQuestions, modeOf, projectFolder, ROW_MODES, decisionOfWrapUp, optionSends, PERSON_TOOLS, proposedCard, startedCard, WRAP_UP_TOOL, wrapUpAsk } from './deck'
+import { asButtons, boxlessWrapUp, callKey, DECIDE_DESCRIPTION, declared, decisionOfPermission, decisionOfQuestions, modeOf, needsLayoutCheck, projectFolder, ROW_MODES, decisionOfWrapUp, optionSends, PERSON_TOOLS, proposedCard, startedCard, WRAP_UP_TOOL, wrapUpAsk } from './deck'
 import type { WrapUpAsk } from './deck'
 import { governingOf, type BannerIO } from './banner'
 import { banner, bannerWidth, type BandRow } from '../panes/banner/picture'
@@ -120,7 +120,7 @@ import { gradeCases, gradesMessage, type GradeCase } from '../panes/visuals/grad
 import { composedCard } from './composed'
 import { plan as planOf, type ComposeItem, type Plan } from '../panes/visuals/compose'
 import { cardWidth, textWidth } from '../panes/visuals/draw'
-import { calloutAt, calloutMark, citationsOf, cropOutline, fileName, filesOf, GROUPS, plain, RING, rulingRef, SHOT_SHARE, shotLabel, shotLine, shotOf, shotSizes, tagLine, type CalloutMark, type ShotFile, type Source } from '../panes/visuals/cited'
+import { calloutAt, calloutMark, citationsOf, cropOutline, fileName, filesOf, plain, RING, rulingRef, SHOT_SHARE, shotLabel, shotLine, shotOf, shotSizes, tagLine, type CalloutMark, type ShotFile, type Source } from '../panes/visuals/cited'
 import { esc, sfWidth } from '../panes/svg'
 import { DESIGN_WIDTH as ARGUMENT_WIDTH, picture as argumentPicture } from '../panes/visuals/picture'
 import { access, composer } from '../panes/visuals/jev'
@@ -922,8 +922,12 @@ async function overflowing($: $, decision: HumanQueueDecision): Promise<{ over: 
     nonce: () => crypto.randomUUID().replace(/-/g, ''),
     sleep: ms => $.clock.sleep(ms),
   }
+  // The design system's counts vouch for a picture laid out by its primitives; only free-form layout, or every
+  // picture while the person has the check on for the session, goes to the browser (spec 181).
+  const always = await layoutCheckOn($)
   const pictures = (decision.pages ?? []).flatMap((page, i) =>
-    page.arguments.flatMap((argument, n) => (argument.picture === undefined ? [] : [{ path: `pages["${decision.options[i]}"].arguments[${n}].picture`, spec: argument.picture }])),
+    page.arguments.flatMap((argument, n) =>
+      argument.picture === undefined || !(always || needsLayoutCheck(argument.picture)) ? [] : [{ path: `pages["${decision.options[i]}"].arguments[${n}].picture`, spec: argument.picture }]),
   )
   // Four seconds each, all at once, so the check stays inside the hook's ten.
   const measured = await Promise.all(pictures.map(async one => ({ ...one, result: await checkOverflow(io, setup, one.spec, { deadlineMs: 4000 }) })))
@@ -3061,6 +3065,17 @@ async function newDecision($: $, held: HumanQueueDecision): Promise<void> {
 /** Scrolls the Decision pane to its top: a new decision and a tab press each start there (spec 171). */
 const deckToTop = ($: $) => $.ui.scroll({ in: DECISION_PANE, to: 'start' }).then(() => undefined, () => undefined)
 
+/**
+ * Opens the Decision pane on the held decision's recommended tab, at its top: every press that opens it starts there,
+ * never on a tab pressed earlier, such as Sources (the owner, spec 176).
+ */
+async function openDecisionPane($: $): Promise<void> {
+  const held = await read($, decision)
+  if (held !== null) await update($, deckPage, () => ({ tab: held.recommend, ask: held.ask }))
+  await $.ui.open({ id: DECISION_PANE, title: 'Decision', focus: true })
+  await deckToTop($)
+}
+
 /** A decision's option pages; none for one held across a release from before pages, which draws as one with none. */
 const deckPagesOf = (held: HumanQueueDecision) =>
   held.pages?.length === held.options.length && held.pages.every(page => Array.isArray(page?.arguments)) ? held.pages : undefined
@@ -3257,6 +3272,30 @@ const STEPS_OFF_KEY = 'stepsOffSessions'
 let renamesPlans = false
 /** The band's size as it last drew, for the show tool's reply to an agent staging a shot. */
 let bandSeen = { maxRows: 0, columns: 0 }
+
+/** The sessions that lay every argument picture out in the headless browser, not just free-form ones (spec 181). */
+const LAYOUT_CHECK_KEY = 'layoutCheckSessions'
+
+async function layoutCheckSessions($: $): Promise<string[]> {
+  const held = await $.store.get(LAYOUT_CHECK_KEY)
+  return Array.isArray(held) ? held.filter((id): id is string => typeof id === 'string') : []
+}
+
+const layoutCheckOn = async ($: $) => {
+  const id = await $.session.id().catch(() => null)
+  return id !== null && (await layoutCheckSessions($)).includes(id)
+}
+
+/** Turns the browser layout check on for every picture in this session, or back to free-form ones only, and says which. */
+async function toggleLayoutCheck($: $): Promise<string> {
+  const id = await $.session.id()
+  const on = await layoutCheckSessions($)
+  const was = on.includes(id)
+  await $.store.set(LAYOUT_CHECK_KEY, was ? on.filter(other => other !== id) : [...on, id])
+  return was
+    ? 'Layout check back to free-form pictures only: a picture built from the design system\'s layout classes is not laid out in a browser.'
+    : 'Layout check on for every picture in this session: each one is laid out in a headless browser before the Decision pane takes it.'
+}
 
 async function stepsOffSessions($: $): Promise<string[]> {
   const held = await $.store.get(STEPS_OFF_KEY)
@@ -3756,6 +3795,7 @@ export const register: Register = (on, _options) => {
     }
     if (mode === 'steps') return { text: await toggleSteps($) }
     if (mode === 'banner') return { text: await toggleBanner($) }
+    if (mode === 'layout-check') return { text: await toggleLayoutCheck($) }
     if (mode === 'native' || mode === 'picture') await update($, cardMode, () => mode)
     await openPane($)
     return { text: await summary($, await openRequests($), await read($, github)) }
@@ -3901,7 +3941,9 @@ export const register: Register = (on, _options) => {
     await keepDeclared($, checked.decision)
     void fillStopped($, 'declared', pagesLine(checked.decision))
     const skipped = unchecked.length === 0 ? '' : ` Not checked for overflow, so drawn at the height you stated: ${unchecked.join('; ')}.`
-    return { result: `The Decision pane shows it when your turn ends. Ask your question in a sentence; the pane holds the case.${skipped}` }
+    // What would draw more is said, never refused (issue 180): the agent may call again with it drawn, and the newer call wins.
+    const more = checked.notes.length === 0 ? '' : `\nTo show more, call decide again with these drawn:\n${checked.notes.map(one => `- ${one}`).join('\n')}`
+    return { result: `The Decision pane shows it when your turn ends. Ask your question in a sentence; the pane holds the case.${skipped}${more}` }
   })
 
   on('tool.call', { tool: TASK_TOOL as typeof TOOL }, async ($, e) => {
@@ -4337,7 +4379,7 @@ export const register: Register = (on, _options) => {
           )}
         </Box>
       )
-    const openDecision = () => $.ui.open({ id: DECISION_PANE, title: 'Decision', focus: true }).then(() => undefined)
+    const openDecision = () => openDecisionPane($)
     const openReader = () => startReader(readerIO($), e.props.isWorking)
     const openFirst = first === undefined ? null : () => openAsk($, qidOf(first))
     // The subagents row (issue #22): only once this session has spawned one. The
@@ -4894,7 +4936,7 @@ export const register: Register = (on, _options) => {
           <Button key="expand-band" label="↗" onPress={() => update($, bandMinimized, () => false)} />,
           <Button key="open-reader" label="📖" onPress={() => startReader(readerIO($), turnRunning)} />,
           <Button key="fold-you" label={`👤 ${fold.waiting}`} onPress={() => openPane($)} />,
-          <Button key="fold-agent" label={`🤖 ${fold.ready ?? '—'}`} onPress={() => $.ui.open({ id: DECISION_PANE, title: 'Decision', focus: true }).then(() => undefined)} />,
+          <Button key="fold-agent" label={`🤖 ${fold.ready ?? '—'}`} onPress={() => openDecisionPane($)} />,
         ]}
         {/* The warm-cache count opens the Caches pane, the Cache label beside it saying what it counts (ADR 0007).
             With the band folded into the footer the word and the context go and the coloured minutes stay, or the footer cuts them. */}
@@ -5453,18 +5495,25 @@ export const register: Register = (on, _options) => {
         <Box flexDirection="column" flexGrow={1} flexShrink={1}>{lines}</Box>
       </Box>
     )
-    // The Sources tab (spec 176), in place of Issues: every cited source once, grouped by kind, each by the number its
-    // tags carry; then the issues the reply names, their rows as before, numbered on from the last source.
+    // One source's row: its number, its kind a dim word before its first line, then the rest of its lines (the owner's
+    // ruling on ADR 0055, 2026-11-15: in number order, with no kind headings).
+    const sourceRow = (source: Source) => {
+      const { n, rests } = source
+      const [first, ...rest] = sourceLines(source).filter(line => line !== null)
+      return sourceEntry(`deck-sources-${n}`, n, [
+        <Box key={`deck-sources-${n}-head`} flexDirection="row" columnGap={1} alignItems="flex-start">
+          <Box key={`deck-sources-${n}-kind`} flexShrink={0}><Text dimColor>{rests.kind === 'ruling' ? 'your ruling' : rests.kind}</Text></Box>
+          <Box key={`deck-sources-${n}-first`} flexDirection="column" flexGrow={1} flexShrink={1}>{first}</Box>
+        </Box>,
+        ...rest,
+      ])
+    }
+    // The Sources tab (spec 176), in place of Issues: every cited source once, in the order of the numbers its tags
+    // carry; then the issues the reply names, their rows as before, numbered on from the last source.
     const sourcesPage = () => [
-      ...GROUPS.map(group => {
-        const entries = citations.sources.filter(one => (group.kinds as readonly string[]).includes(one.rests.kind))
-        return entries.length === 0 ? null : (
-          <Box key={`deck-sources-group-${group.label}`} flexDirection="column" rowGap={1}>
-            <Text dimColor {...caption}>{group.label}</Text>
-            {entries.map(one => sourceEntry(`deck-sources-${one.n}`, one.n, sourceLines(one)))}
-          </Box>
-        )
-      }),
+      citations.sources.length === 0 ? null : (
+        <Box key="deck-sources-cited" flexDirection="column" rowGap={1}>{citations.sources.map(sourceRow)}</Box>
+      ),
       tickets.length === 0 ? null : (
         <Box key="deck-sources-group-Issues" flexDirection="column" rowGap={1}>
           <Text dimColor {...caption}>Issues</Text>

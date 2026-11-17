@@ -5,7 +5,10 @@ import type { SessionMessage } from 'claude-code'
 import type { HumanQueueArgument, HumanQueueDecision, HumanQueueOptionPage, HumanQueueRests } from '../types'
 
 import { MIN_TEXT_PX } from '../panes/visuals/overflow'
-import { DESIGN_WIDTH, MAX_HEIGHT, PASSIVE, picture } from '../panes/visuals/picture'
+import { DESIGN_WIDTH, MAX_HEIGHT, PASSIVE, picture, scan } from '../panes/visuals/picture'
+import { CLASSES, designChecks, layoutVouched, MAX_MARKS, TOKENS } from '../panes/design/system'
+import { EXEMPLARS } from '../panes/design/exemplars'
+import { drawShortcut, FORM_JOBS, isShortcut } from '../panes/design/shortcuts'
 import { shotAsk, unseenIn, type ShotAsk } from '../panes/visuals/shots'
 import { checkSource, type ReadFile } from '../panes/visuals/sources'
 import { HEADLINE_WORDS } from './reply'
@@ -213,7 +216,8 @@ const SHAPE =
   '"what": string, "dependsOn"?: {"on": string, "otherwise": string, "if": string}, "arguments": [{"claim": string, ' +
   `"rests": {"kind": ${KINDS.map(kind => `"${kind}"`).join(' | ')}, "ref"?: string, "excerpt"?: string, ` +
   '"crop"?: {"x", "y", "w", "h"}, "callout"?: {"x", "y", "label", "side"?: "right" | "left" | "above" | "below"}, "before"?: {"ref", "crop"?}}, ' +
-  '"picture"?: {"html": string, "height": number}}], "risk": string, "fallback"?: string, ' +
+  '"picture"?: {"html": string, "height": number} | {"form": string, "data": [object], "x": string, "y": string | [string], "highlight"?: string | number}, ' +
+  '"exemplar"?: string}], "risk": string, "fallback"?: string, ' +
   '"whyNot": [{"option": string, "line": string}] | string}]}'
 
 /** What the decide tool tells the agent, read on every turn: when to call it, the page shape, and how each field is checked. */
@@ -243,27 +247,43 @@ export const DECIDE_DESCRIPTION =
   'scripts/desktop-shot.sh took, cite its <out>@2x.png, the full-resolution file, whose type draws sharp, never the ' +
   'halved <out>.png; "ruling" quotes the person\'s own words from this session or a "## Rulings" comment you ' +
   `read, its ref the issue it was ruled on ("issue 171") when there is one; "estimate" and "assumption" need no source and are shown as such. A shot with before needs a callout on the After marking what changed. excerpt: ${WORDS.excerpt} words. ` +
-  'Show rather than tell. An argument\'s exhibit, a shot or a picture, draws right under its claim. An argument earns an ' +
-  'exhibit only when the reader must relate things: name what the eye reads off it that the claim cannot (where, ' +
-  'which, how much, how it is spread), and if nothing, the claim stays a sentence. The content picks the form: a ' +
-  'visible claim, a shot of that surface cropped to the part it names, with before for a fix; options that differ, ' +
-  'the same small drawing on each page with the difference marked; a sequence, boxes and arrows with a verb on each ' +
-  'arrow; 2 to 5 values, bars from zero with one highlighted; change over time, a line; one number, bold in the claim ' +
-  'with no picture; command output, a "run" excerpt with no drawing. A picture whose text mostly repeats its claim ' +
-  `is refused. picture: an HTML fragment laid out ` +
-  `${DESIGN_WIDTH} CSS pixels wide at the height you state (at most ${MAX_HEIGHT}), text no smaller than ${MIN_TEXT_PX}px, well-formed, of these elements ` +
-  `only: ${[...PASSIVE].join(', ')}; no event handler, no image file, nothing loaded from outside it. It draws ` +
-  `indented under its claim, ${DESIGN_WIDTH} wide or less, its type beside the pane's 13px text, so set each value ` +
-  `left-aligned beside its label, never pushed to a right edge: draw in the desktop's neutrals with at most one ` +
-  `accent, labels in the desktop's dim grey, bold only the one figure the claim rests on, and no amber frame or ` +
-  `green fill, which the pane keeps for a warning and the recommendation. risk: what could go wrong (${WORDS.risk} words); fallback: what you would do then ` +
+  'Show rather than tell. The person has already read your reply, so the pane is for what the eye takes in at a ' +
+  'glance: draw every argument that rests on facts. Under each claim goes its exhibit, a shot or a picture of the ' +
+  'facts the claim rests on. The claim says what the facts mean; the picture carries them: the values, the order, ' +
+  'where, which, how much. Choose arguments you can draw: one with facts to draw beats one without. An estimate ' +
+  'draws like a measure, its figure labelled as estimated. An assumption with nothing to draw is the weakest ' +
+  'argument: swap it for one that rests on what you read or ran, or leave it out, since two drawn arguments beat ' +
+  'four with two in words. The quickest ' +
+  'drawings: numbers you read or ran, pass them as a table (picture {form, data, x, y}, below) and they are drawn ' +
+  'for you; a visible claim, a shot of that surface cropped to the part it names, with before for a fix; where a ' +
+  'thing sits or what waits on what, place-in-structure; which few of many, which-of-many; values against a line, ' +
+  'threshold; events in time, timeline; options that differ, the same small drawing on each page with the ' +
+  'difference marked. Geometry carries the fact, so take the words away and the drawing must still say something: ' +
+  'a row of word chips joined by "then" says nothing more than the sentence. Draw an order only when its steps ' +
+  'differ in something you can mark (time, size, who waits). A ruling is the person\'s own words: it stays their ' +
+  'quote, never drawn. An accepted call names each argument left undrawn and how to draw it: call decide again ' +
+  'with it drawn and the pane shows the new one. ' +
+  `picture: an HTML fragment laid out ${DESIGN_WIDTH} CSS pixels wide at the height you state (at most ${MAX_HEIGHT}), well-formed, of these ` +
+  `elements only: ${[...PASSIVE].join(', ')}; no event handler, no image file, nothing loaded from outside it. It draws with the Vantage Point ` +
+  'design system: compose freely, in the form the content needs, from its classes, and the stylesheet supplies the look. A picture carries ' +
+  'marks (the classes bar, track, dot, node, edge, head, tick, chip, ring, or svg shapes), with the words as their labels; text alone is ' +
+  `refused. At most one highlight, on the one figure the claim rests on; at most ${MAX_MARKS} marks; no class outside the vocabulary ` +
+  'unless the picture\'s own <style> defines it; colour only as these tokens, never a hex value: ' +
+  `${Object.keys(TOKENS).map(name => `var(--${name})`).join(', ')}. Classes: ${Object.entries(CLASSES).map(([name, job]) => `${name} (${job})`).join('; ')}. ` +
+  `Text is 13px, labels 12px, never smaller than ${MIN_TEXT_PX}px. Worked exemplars: ` +
+  EXEMPLARS.slice(0, 3).map(one => `${one.id}, ${one.job}, height ${one.height}: ${one.html}`).join(' ') +
+  ` Others to start from: ${EXEMPLARS.slice(3).map(one => `${one.id} (${one.job})`).join('; ')}; name the one you start from in the argument's exemplar. ` +
+  `For a table of numbers, pass picture as {form, data, x, y, highlight?} instead and it is drawn for you: ` +
+  `${Object.entries(FORM_JOBS).map(([form, job]) => `${form}, ${job}`).join('; ')}; x names the label column, y the numeric one, highlight one row's x. ` +
+  'A refusal names the rule, its count and the repair: mend the picture and call again. ' +
+  `risk: what could go wrong (${WORDS.risk} words); fallback: what you would do then ` +
   `(${WORDS.fallback}). whyNot: on the recommended page [{"option", "line"}], a line per other option on why it lost; ` +
   `elsewhere one line on why this option was not recommended (${WORDS.whyNot} words a line). A field over its words, ` +
   'a source that does not hold or a picture that breaks a rule is refused, each named, and nothing shows until a ' +
   'call passes. The pane holds the case: your reply states the ask in a sentence and does not repeat the arguments.'
 
-/** A declaration the pane can draw; or every field to fix, each by its path. */
-export type Declared = { decision: Decision } | { refused: string[] }
+/** A declaration the pane can draw, with what would draw more of it, each by its path; or every field to fix. */
+export type Declared = { decision: Decision; notes: string[] } | { refused: string[] }
 
 /** Cuts and encodes one shot (hooks/shots.ts, spec 176): the shot, or every reason it cannot be, named under `at`. */
 export type ShotEncode = (ask: ShotAsk, at: string) => Promise<{ shot: NonNullable<HumanQueueRests['shot']> } | { refused: string[] }>
@@ -291,9 +311,14 @@ const sameOption = (a: string, b: string) => a.trim().toLowerCase() === b.trim()
 /** Records every refusal of one declaration, and reads its text fields against their word limits. */
 class Refusals {
   readonly all: string[] = []
+  /** What would show more, on a call that is accepted all the same (issue 180). */
+  readonly notes: string[] = []
   add(path: string, why: string): null {
     this.all.push(`${path}: ${why}`)
     return null
+  }
+  note(path: string, how: string): void {
+    this.notes.push(`${path}: ${how}`)
   }
   /** The field's text when it holds `words` or fewer; null, with the reason recorded at `path`, when not. */
   text(value: unknown, words: number, path: string, what: string): string | null {
@@ -345,7 +370,29 @@ export async function declared(input: Record<string, unknown>, messages: readonl
   // Every shot cuts and encodes at once; each fills its argument's source, or its reasons follow the fields', in order.
   for (const reasons of await Promise.all(against.encoding)) no.all.push(...reasons)
   if (no.all.length > 0) return { refused: [...new Set(no.all)] }
-  return { decision: { headline: headline!, ask: ask!, options, recommend, pages } }
+  return { decision: { headline: headline!, ask: ask!, options, recommend, pages }, notes: no.notes }
+}
+
+const EXEMPLAR_CUES: readonly [RegExp, string][] = [
+  [/\b(before|after|fix|fixed|regress\w*)\b/i, 'before-after'],
+  [/\b(then|order|first|next|step\w*|land\w*|sequence|pipeline|flow)\b/i, 'sequence'],
+  [/\b(day|week|month|hour|today|yesterday|since|when|date\w*|time\w*)\b/i, 'timeline'],
+  [/\b(over|under|above|below|cap\w*|limit\w*|threshold|budget|past)\b/i, 'threshold'],
+  [/\b(among|which|only|most|few)\b/i, 'which-of-many'],
+  [/\b(folder|file|module|tree|parent|child|inside|depend\w*|structure)\b/i, 'place-in-structure'],
+]
+
+/** The cheapest drawing of an undrawn argument (issue 180): a table of the numbers its source holds, else the exemplar its words point to. */
+export function howToDraw(claim: string, excerpt: string | undefined): string {
+  const said = `${excerpt ?? ''} ${claim}`
+  const numbers = [...new Set(said.match(/\d+(?:\.\d+)?%?/g) ?? [])]
+  if (numbers.length >= 2) {
+    const rows = numbers.slice(0, 6).map(one => `{"label": "…", "value": ${parseFloat(one)}}`).join(', ')
+    return `not drawn; its source holds ${numbers.slice(0, 6).join(', ')}, so picture {"form": "bars", "data": [${rows}], "x": "label", "y": "value"} draws them, each label naming what its number counts`
+  }
+  const cued = EXEMPLAR_CUES.filter(([cue]) => cue.test(said)).map(([, id]) => id)
+  const ids = [...new Set([...cued, 'which-of-many', 'place-in-structure'])].slice(0, 2)
+  return `not drawn; start from the ${ids.join(' or ')} exemplar, drawing the facts it rests on rather than its words`
 }
 
 /** One option's page, checked: null when any field of it is refused, each recorded at its path. */
@@ -379,7 +426,16 @@ async function pageOf(
       no.add(`${where}.rests`, `the claim is about what a person sees ("${seen[0]}"), so a ${String(kind)} cannot prove it: rest it on a shot of that surface, or the person's ruling`)
     }
     const drawn = argument.picture === undefined ? undefined : pictureOf(argument.picture, `${where}.picture`, no, claim)
-    if (claim !== null && rests !== null && drawn !== null) argued.push({ claim, rests, ...(drawn === undefined ? {} : { picture: drawn }) })
+    // The exemplar a picture starts from, kept for the eval's counts (spec 181).
+    const exemplar = argument.exemplar
+    if (exemplar !== undefined && !EXEMPLARS.some(one => one.id === exemplar)) {
+      no.add(`${where}.exemplar`, `${JSON.stringify(exemplar)} is no exemplar: name one of ${EXEMPLARS.map(one => one.id).join(', ')}, or leave it out`)
+    }
+    // A ruling stays the person's quote, and a shot is its own exhibit; every other undrawn argument hears how to draw it.
+    if (claim !== null && rests !== null && drawn === undefined && rests.kind !== 'shot' && rests.kind !== 'ruling') no.note(where, howToDraw(claim, rests.excerpt))
+    if (claim !== null && rests !== null && drawn !== null) {
+      argued.push({ claim, rests, ...(drawn === undefined ? {} : { picture: drawn }), ...(typeof exemplar === 'string' ? { exemplar } : {}) })
+    }
   }
   const risk = no.text(page.risk, WORDS.risk, `${at}.risk`, 'what could go wrong')
   const fallback = page.fallback === undefined ? undefined : no.text(page.fallback, WORDS.fallback, `${at}.fallback`, 'what you would do then')
@@ -452,11 +508,28 @@ function shotOf(given: Record<string, unknown>, path: string, excerpt: string | 
   return rests
 }
 
-/** An argument's picture, checked by the picture module at its design width; null, with every reason recorded, when refused. */
+/**
+ * Whether a picture's layout needs the headless browser to vouch for it (spec 181): the design system's counts
+ * vouch for one laid out by its layout classes, or one of fixed-height svg; free-form layout escalates.
+ */
+export function needsLayoutCheck(spec: { html: string; height: number }): boolean {
+  return !layoutVouched(scan(spec.html).tags, spec.height)
+}
+
+/** An argument's picture, checked by the picture module and the design system at its design width; null, with every reason recorded, when refused. */
 function pictureOf(value: unknown, path: string, no: Refusals, claim: string | null): { html: string; height: number } | null {
+  // A number shortcut is drawn from the design system's primitives here, then checked as any picture (spec 181).
+  if (isShortcut(value)) {
+    const chart = drawShortcut(value)
+    if ('refused' in chart) {
+      for (const reason of chart.refused) no.add(path, reason)
+      return null
+    }
+    return pictureOf(chart, path, no, claim)
+  }
   const given = object(value)
   if (given === null || typeof given.html !== 'string' || typeof given.height !== 'number') {
-    return no.add(path, `{html, height}, an HTML fragment and its height in CSS pixels at ${DESIGN_WIDTH} wide`)
+    return no.add(path, `{html, height}, an HTML fragment and its height in CSS pixels at ${DESIGN_WIDTH} wide, or {form, data, x, y} for a table of numbers`)
   }
   const spec = { html: given.html, height: given.height }
   // A picture that says its claim again shows nothing the claim does not (spec 176): most of its words are the claim's,
@@ -465,11 +538,17 @@ function pictureOf(value: unknown, path: string, no: Refusals, claim: string | n
   const claimed = claim === null ? new Map<string, string>() : contentWords(claim)
   const shared = [...words.keys()].filter(word => claimed.has(word))
   const restated = words.size > 0 && shared.length / words.size >= RESTATED_SHARE && words.size - shared.length < OWN_WORDS
-  if (restated) no.add(path, `its text repeats its claim (${shared.map(word => words.get(word)).join(', ')}): draw what the claim cannot say (where, which, how much, how it is spread), or drop the picture`)
+  // A picture that says its claim again is drawn all the same; the note asks for the claim to carry the meaning (issue 180).
+  if (restated) no.note(path, `drawn, though its words mostly repeat its claim (${shared.map(word => words.get(word)).join(', ')}): let the claim say what the picture's facts mean, and the picture carry where, which and how much`)
   const drawn = picture(spec, DESIGN_WIDTH)
-  if (!('refused' in drawn)) return restated ? null : spec
-  for (const reason of drawn.refused) no.add(path, reason)
-  return null
+  if ('refused' in drawn) {
+    for (const reason of drawn.refused) no.add(path, reason)
+    return null
+  }
+  const read = scan(spec.html)
+  const broken = designChecks(read.tags, read.sheets)
+  for (const reason of broken) no.add(path, reason)
+  return broken.length > 0 ? null : spec
 }
 
 /**

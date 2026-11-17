@@ -6,8 +6,10 @@
 // The check is a small XML tokenizer over tags, attributes and text, with an
 // allowlist of passive elements: no DOM exists in the hooks. A picture takes no
 // press and loads nothing, so anything that runs code or reaches outside the
-// fragment is refused, each reason naming what to fix.
+// fragment is refused, each reason naming what to fix. Every picture draws with the design system's
+// stylesheet (spec 181), put first inside its root.
 import { TEXT } from '../../hooks/signal.ts'
+import { STYLESHEET } from '../design/system.ts'
 
 export type PictureSpec = { html: string; height: number }
 export type DrawnPicture = { source: string; width: number; height: number; alt?: string }
@@ -42,7 +44,7 @@ const NAMED: Record<string, string> = {
   img: 'loads an image file; draw it with svg shapes',
 }
 
-const BASE_STYLE = `font-family: -apple-system, system-ui, sans-serif; color: ${TEXT}; font-size: 14px; line-height: 1.5; margin: 0`
+const BASE_STYLE = `font-family: -apple-system, system-ui, sans-serif; color: ${TEXT}; font-size: 13px; line-height: 1.45; margin: 0`
 
 const ENTITY = /^&(?:amp|lt|gt|quot|apos|#([0-9]+)|#x([0-9a-fA-F]+));/
 const NAME = /^[A-Za-z_][\w.:-]*/
@@ -74,12 +76,18 @@ function outside(text: string, where: string, css: boolean): string[] {
   return reasons
 }
 
-type Scan = { reasons: string[]; svgAt: number[] }
+/** One element of a fragment as the tokenizer read it: its name, its attributes as written, and where it opens. */
+export type Tag = { name: string; attrs: Record<string, string>; at: number; depth: number }
+
+/** A fragment read: why it is refused, where each svg needs its namespace, every element and every style sheet's text. */
+export type Scan = { reasons: string[]; svgAt: number[]; tags: Tag[]; sheets: string[] }
 
 /** Tokenize the fragment: every element, attribute and run of text, checked as it goes. Stops at the first malformed token. */
-function scan(html: string): Scan {
+export function scan(html: string): Scan {
   const reasons: string[] = []
   const svgAt: number[] = []
+  const tags: Tag[] = []
+  const sheets: string[] = []
   const open: { name: string; at: number }[] = []
   const line = (at: number) => html.slice(0, at).split('\n').length
   const malformed = (what: string, at: number) => reasons.push(`not well-formed XML at line ${line(at)}: ${what}`)
@@ -102,37 +110,40 @@ function scan(html: string): Scan {
     const lt = html.indexOf('<', i)
     const textEnd = lt === -1 ? html.length : lt
     const text = html.slice(i, textEnd)
-    if (!entities(text, i)) return { reasons, svgAt }
-    if (open.at(-1)?.name === 'style') reasons.push(...outside(decoded(text), `the <style> at line ${line(i)}`, true))
+    if (!entities(text, i)) return { reasons, svgAt, tags, sheets }
+    if (open.at(-1)?.name === 'style') {
+      sheets.push(text)
+      reasons.push(...outside(decoded(text), `the <style> at line ${line(i)}`, true))
+    }
     if (lt === -1) break
     i = lt
 
     const rest = html.slice(i, i + 12)
     if (rest.startsWith('<!--')) {
       const end = html.indexOf('-->', i + 4)
-      if (end === -1) return malformed('a comment that never closes', i), { reasons, svgAt }
+      if (end === -1) return malformed('a comment that never closes', i), { reasons, svgAt, tags, sheets }
       i = end + 3
       continue
     }
-    if (/^<!doctype/i.test(rest)) return reasons.push(`a DOCTYPE at line ${line(i)}: a picture is a fragment, so drop it`), { reasons, svgAt }
-    if (rest.startsWith('<!ENTITY')) return reasons.push(`an entity declaration (\`<!ENTITY\`) at line ${line(i)}: write the text itself`), { reasons, svgAt }
-    if (rest.startsWith('<![CDATA[')) return reasons.push(`a CDATA section at line ${line(i)}: escape the text with &lt; and &amp; instead`), { reasons, svgAt }
-    if (rest.startsWith('<!') || rest.startsWith('<?')) return malformed(`\`${rest.slice(0, 2)}\` opens a declaration a picture cannot hold`, i), { reasons, svgAt }
+    if (/^<!doctype/i.test(rest)) return reasons.push(`a DOCTYPE at line ${line(i)}: a picture is a fragment, so drop it`), { reasons, svgAt, tags, sheets }
+    if (rest.startsWith('<!ENTITY')) return reasons.push(`an entity declaration (\`<!ENTITY\`) at line ${line(i)}: write the text itself`), { reasons, svgAt, tags, sheets }
+    if (rest.startsWith('<![CDATA[')) return reasons.push(`a CDATA section at line ${line(i)}: escape the text with &lt; and &amp; instead`), { reasons, svgAt, tags, sheets }
+    if (rest.startsWith('<!') || rest.startsWith('<?')) return malformed(`\`${rest.slice(0, 2)}\` opens a declaration a picture cannot hold`, i), { reasons, svgAt, tags, sheets }
 
     if (rest.startsWith('</')) {
       const name = NAME.exec(html.slice(i + 2))?.[0]
       const close = name === undefined ? -1 : i + 2 + name.length
       const end = close === -1 ? null : /^\s*>/.exec(html.slice(close))
-      if (name === undefined || !end) return malformed('a closing tag that is not `</name>`', i), { reasons, svgAt }
+      if (name === undefined || !end) return malformed('a closing tag that is not `</name>`', i), { reasons, svgAt, tags, sheets }
       const top = open.pop()
-      if (!top) return malformed(`\`</${name}>\` closes nothing`, i), { reasons, svgAt }
-      if (top.name !== name) return malformed(`\`</${name}>\` closes \`<${top.name}>\` from line ${line(top.at)}`, i), { reasons, svgAt }
+      if (!top) return malformed(`\`</${name}>\` closes nothing`, i), { reasons, svgAt, tags, sheets }
+      if (top.name !== name) return malformed(`\`</${name}>\` closes \`<${top.name}>\` from line ${line(top.at)}`, i), { reasons, svgAt, tags, sheets }
       i = close + end[0].length
       continue
     }
 
     const name = NAME.exec(html.slice(i + 1))?.[0]
-    if (name === undefined) return malformed('a stray `<`; write `&lt;`', i), { reasons, svgAt }
+    if (name === undefined) return malformed('a stray `<`; write `&lt;`', i), { reasons, svgAt, tags, sheets }
     const named = NAMED[name.toLowerCase()]
     if (named) reasons.push(`\`<${name}>\` at line ${line(i)} ${named}: a picture holds passive elements only`)
     else if (!PASSIVE.has(name)) reasons.push(`\`<${name}>\` at line ${line(i)} is not a passive element a picture may hold (${[...PASSIVE].join(', ')})`)
@@ -140,28 +151,31 @@ function scan(html: string): Scan {
     i += 1 + name.length
 
     const seen = new Set<string>()
+    const attrs: Record<string, string> = {}
+    tags.push({ name, attrs, at: tagAt, depth: open.length })
     let selfClosing = false
     for (;;) {
       const blank = /^\s*/.exec(html.slice(i))?.[0] ?? ''
       i += blank.length
       if (html.startsWith('/>', i)) { selfClosing = true; i += 2; break }
       if (html.startsWith('>', i)) { i += 1; break }
-      if (i >= html.length) return malformed(`\`<${name}\` never ends with \`>\``, tagAt), { reasons, svgAt }
+      if (i >= html.length) return malformed(`\`<${name}\` never ends with \`>\``, tagAt), { reasons, svgAt, tags, sheets }
       const attr = NAME.exec(html.slice(i))?.[0]
-      if (attr === undefined || blank === '') return malformed(`\`<${name}\` holds something that is not an attribute`, i), { reasons, svgAt }
+      if (attr === undefined || blank === '') return malformed(`\`<${name}\` holds something that is not an attribute`, i), { reasons, svgAt, tags, sheets }
       i += attr.length
       const eq = /^\s*=\s*/.exec(html.slice(i))
-      if (!eq) return malformed(`attribute \`${attr}\` has no value; write \`${attr}="…"\``, i), { reasons, svgAt }
+      if (!eq) return malformed(`attribute \`${attr}\` has no value; write \`${attr}="…"\``, i), { reasons, svgAt, tags, sheets }
       i += eq[0].length
       const quote = html[i]
-      if (quote !== '"' && quote !== "'") return malformed(`attribute \`${attr}\` is unquoted; put its value in quotes`, i), { reasons, svgAt }
+      if (quote !== '"' && quote !== "'") return malformed(`attribute \`${attr}\` is unquoted; put its value in quotes`, i), { reasons, svgAt, tags, sheets }
       const valueEnd = html.indexOf(quote, i + 1)
-      if (valueEnd === -1) return malformed(`attribute \`${attr}\`'s quote never closes`, i), { reasons, svgAt }
+      if (valueEnd === -1) return malformed(`attribute \`${attr}\`'s quote never closes`, i), { reasons, svgAt, tags, sheets }
       const value = html.slice(i + 1, valueEnd)
-      if (value.includes('<')) return malformed(`attribute \`${attr}\` holds a \`<\`; write \`&lt;\``, i), { reasons, svgAt }
-      if (!entities(value, i + 1)) return { reasons, svgAt }
-      if (seen.has(attr)) return malformed(`attribute \`${attr}\` is given twice on \`<${name}>\``, i), { reasons, svgAt }
+      if (value.includes('<')) return malformed(`attribute \`${attr}\` holds a \`<\`; write \`&lt;\``, i), { reasons, svgAt, tags, sheets }
+      if (!entities(value, i + 1)) return { reasons, svgAt, tags, sheets }
+      if (seen.has(attr)) return malformed(`attribute \`${attr}\` is given twice on \`<${name}>\``, i), { reasons, svgAt, tags, sheets }
       seen.add(attr)
+      attrs[attr] = value
       i = valueEnd + 1
 
       const where = `attribute \`${attr}\` on \`<${name}>\` at line ${line(tagAt)}`
@@ -180,7 +194,7 @@ function scan(html: string): Scan {
   }
   const unclosed = open.at(-1)
   if (unclosed) malformed(`\`<${unclosed.name}>\` is never closed; close it, or write \`<${unclosed.name}/>\``, unclosed.at)
-  return { reasons, svgAt }
+  return { reasons, svgAt, tags, sheets }
 }
 
 /**
@@ -213,7 +227,7 @@ export function picture(spec: PictureSpec, paneWidth: number): DrawnPicture | Re
   const source =
     `<svg xmlns="${SVG_NS}" width="${paneWidth}" height="${scaled}" viewBox="0 0 ${DESIGN_WIDTH} ${height}">` +
     `<foreignObject x="0" y="0" width="${DESIGN_WIDTH}" height="${height}">` +
-    `<div xmlns="${XHTML_NS}" style="${BASE_STYLE}">${named}</div>` +
+    `<div xmlns="${XHTML_NS}" class="vp" style="${BASE_STYLE}"><style>${STYLESHEET}</style>${named}</div>` +
     `</foreignObject></svg>`
   if (source.length > MAX_SOURCE) return { refused: [tooLong] }
   return { source, width: paneWidth, height: scaled }
