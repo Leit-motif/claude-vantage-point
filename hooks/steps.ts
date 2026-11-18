@@ -63,6 +63,29 @@ export function applyCall(steps: readonly Step[], input: Record<string, unknown>
 /** A wrap-up checks off every step, as the app's list does. */
 export const finished = (steps: readonly Step[]): Step[] => steps.map(step => ({ ...step, status: 'completed' }))
 
+/** A turn that ends normally checks off the last step when it is the one in progress, as the app's list does (issue 183). */
+export function atTurnEnd(steps: readonly Step[]): Step[] {
+  const last = steps.at(-1)
+  return last?.status === 'in_progress' ? [...steps.slice(0, -1), { ...last, status: 'completed' }] : [...steps]
+}
+
+/**
+ * The note a prompt carries to the model while the band holds steps (issue 183). The rename leaves
+ * the model a history of steps calls under a prompt that asks for update_plan, and nothing after the
+ * first turn says they are one list, so later turns stopped updating it. None with no steps held.
+ */
+export function stepsNote(steps: readonly Step[]): string | null {
+  if (steps.length === 0) return null
+  const on = currentOf(steps)
+  const where = on === undefined ? `all ${steps.length} steps done` : `${doneOf(steps)} done, on "${on.text}"`
+  return (
+    `The band above the prompt shows your task list: ${where}. Your ${STEPS_TOOL} calls in this conversation are your ` +
+    `${UPDATE_PLAN_TOOL} calls, renamed so the band draws the list in place of the app. Keep it current this turn: ` +
+    `if this request runs more than one command, make ${UPDATE_PLAN_TOOL} part of your first tool call, a new list for new work, ` +
+    'or advance and done to finish this one.'
+  )
+}
+
 /** The steps the conversation's calls leave, replayed in order: how a restarted session gets them back. */
 export function stepsOfCalls(calls: readonly { tool: string; input: Record<string, unknown>; isError?: true }[]): Step[] {
   let steps: Step[] = []

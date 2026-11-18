@@ -103,7 +103,7 @@ import { frontierOf, labelMap, nextOf, parseRepoIssues, readyCount, STATES as FR
 import { STATE_SECTION, stateLine } from './state'
 import { childCounted, childFacts, SESSION_SHAPE, SUBAGENT_SHAPE, TASK_SHAPE, childOf, childrenOf, CHILD_STALE_MS, counts as teamCounts, detail, elapsed, ended, freshMeta, isChildRunning, isFailed, isLive, isRunning, launched, mergeListed, midTurn, modelOf, notified, ordered, orderedChildren, orderedTasks, rowFacts, ROOM, taskFacts, taskLabel, waitingOn } from './subagents'
 import type { Background, ChildSession, Subagent, SubagentMeta } from './subagents'
-import { applyCall, cardLines, doneOf, finished, linesOf, renamedPlans, stepsOfCalls, STEPS_TOOL, UPDATE_PLAN_TOOL } from './steps'
+import { applyCall, atTurnEnd, cardLines, doneOf, finished, linesOf, renamedPlans, stepsNote, stepsOfCalls, STEPS_TOOL, UPDATE_PLAN_TOOL } from './steps'
 import { endReader, isHeld, pacingOf, speedReader, startReader, switchLevel, toggleReader } from './reader'
 import { GIST_SECTION, splitGist } from '../panes/reader/gist'
 import type { ReaderIO } from './reader'
@@ -3370,6 +3370,13 @@ async function renamesHere($: $): Promise<boolean> {
   return (await read($, stepsHere)) && (await sessionMode($).catch(() => null)) !== 'plan'
 }
 
+/** The prompt with the steps note beside it while the band holds steps (issue 183); a Keep warm ping carries none. */
+async function withStepsNote<E extends { text: string; context?: readonly string[] }>($: $, e: E): Promise<E> {
+  if (e.text.includes(PING) || !(await read($, stepsHere))) return e
+  const note = stepsNote(await read($, steps))
+  return note === null ? e : { ...e, context: [...(e.context ?? []), note] }
+}
+
 /** The task list the conversation's calls leave: a restarted session gets it back from its transcript. */
 async function replaySteps($: $): Promise<void> {
   const messages = await $.session.messages().catch(() => [])
@@ -3592,6 +3599,8 @@ export const register: Register = (on, _options) => {
     }
     if (e.agentId === undefined) void readAgent($).catch(() => undefined)
     const result = await next(e)
+    // A turn that ends normally checks off its last step, as the app's own list does (issue 183).
+    if (e.agentId === undefined && e.reason === 'answer' && (await read($, stepsHere))) await update($, steps, atTurnEnd)
     if (e.agentId === undefined) {
       // Read off the reply's text alone, so the Tickets page needs no model call.
       const tickets = e.reason === 'answer' ? await ticketsOf($, e.answer) : []
@@ -3901,7 +3910,8 @@ export const register: Register = (on, _options) => {
     if (answer?.isError === true) return { deny: answer.text ?? 'update_plan failed.' }
     if (agentId === undefined) await update($, steps, held => applyCall(held, input))
     const reply = answer === null ? undefined : (answer.text ?? (typeof answer.result === 'string' ? answer.result : undefined))
-    return { result: reply ?? 'Steps shown in the band.' }
+    // The model's history records this call under the steps tool: say it is update_plan, so later turns keep calling it (issue 183).
+    return { result: `${reply ?? 'Steps shown in the band.'} (This is your ${UPDATE_PLAN_TOOL} call; keep calling that tool each turn.)` }
   })
 
   // A wrap-up checks off every step, as the app's own list does.
@@ -4051,7 +4061,7 @@ export const register: Register = (on, _options) => {
     if ((await read($, decision)) !== null) await logRow($, 'prompt', `${JSON.stringify(e.origin)} ${e.text.slice(0, 24)}`)
     if (CAPTURED.has(e.origin.kind) && e.text.trim() !== '') await clearDecision($, `prompt ${e.origin.kind}`)
     const target = await read($, capture)
-    if (target === null || !CAPTURED.has(e.origin.kind) || e.text.trim() === '') return next(e)
+    if (target === null || !CAPTURED.has(e.origin.kind) || e.text.trim() === '') return next(await withStepsNote($, e))
     await update($, capture, () => null)
     const request = await requestOf($, target.request)
     const item = request === undefined ? undefined : findItem(request, target.item, target.heading)
@@ -4059,9 +4069,9 @@ export const register: Register = (on, _options) => {
     const name = sourceOf(target.request).id
     if (isGone) {
       $.ui.toast(`The comment's target ${name} moved or closed, so your message went to the chat.`)
-      return next(e)
+      return next(await withStepsNote($, e))
     }
-    if (!(await saveComment($, target, e.text))) return next(e)
+    if (!(await saveComment($, target, e.text))) return next(await withStepsNote($, e))
     const where = target.heading === null ? `request ${name}` : `item ${target.heading}`
     return { drop: `💬 Saved as the comment on ${where}.` }
   }).catch(($, e, next) => {
