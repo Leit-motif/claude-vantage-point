@@ -94,7 +94,7 @@ import { isTodo, todoMoves, todoOf } from '../panes/human-queue/todo'
 import { todoBodyProps, todoCard, todoFallback, type TodoCard } from './todo-card'
 import { agentPill, youPill, freshCount, freshPill, staleCount, readSpecProgress, waitingTotal, NEW_ASK_MS } from './band'
 import type { CountObservation } from './band'
-import { asButtons, boxlessWrapUp, callKey, DECIDE_DESCRIPTION, declared, decisionOfPermission, decisionOfQuestions, modeOf, needsLayoutCheck, projectFolder, ROW_MODES, decisionOfWrapUp, optionSends, PERSON_TOOLS, proposedCard, startedCard, WRAP_UP_TOOL, wrapUpAsk } from './deck'
+import { asButtons, boxlessWrapUp, callKey, DECIDE_DESCRIPTION, PICTURE_REFERENCE, declared, decisionOfPermission, decisionOfQuestions, modeOf, needsLayoutCheck, projectFolder, ROW_MODES, decisionOfWrapUp, optionSends, PERSON_TOOLS, proposedCard, startedCard, WRAP_UP_TOOL, wrapUpAsk } from './deck'
 import type { WrapUpAsk } from './deck'
 import { governingOf, type BannerIO } from './banner'
 import { banner, bannerWidth, type BandRow } from '../panes/banner/picture'
@@ -3924,6 +3924,15 @@ export const register: Register = (on, _options) => {
   // The decide tool writes nothing outside the session's own pane, so it never asks (issue 167).
   on('tool.check', { tool: DECIDE_TOOL as typeof TOOL }, async () => ({ decision: 'allow', reason: 'It only fills the Decision pane.' }))
 
+  // The picture reference the description has no room for (issue 185): sent once a session, on the first reply that
+  // names an undrawn argument or refuses a picture, so the agent learns the classes where it needs them.
+  let referenceSent = false
+  const withReference = (text: string, needs: boolean) => {
+    if (!needs || referenceSent) return text
+    referenceSent = true
+    return `${text}\n\nHow to draw a picture:\n${PICTURE_REFERENCE}`
+  }
+
   // The agent's declaration, checked here and shown when its turn ends (issue 167).
   on('tool.call', { tool: DECIDE_TOOL as typeof TOOL }, async ($, e) => {
     if (e.agentId !== undefined) return { deny: 'Only the session\'s own agent declares a decision; a subagent reports to it instead.' }
@@ -3939,7 +3948,8 @@ export const register: Register = (on, _options) => {
     const checked = await declared(input, messages, readFile, { cwd, encode: shotEncoder(shotIO($), await host($)) })
     if ('refused' in checked) {
       await fillStopped($, 'refused', checked.refused.join('; '))
-      return { deny: `Not shown. Fix these and call decide again:\n${checked.refused.map(one => `- ${one}`).join('\n')}` }
+      const why = `Not shown. Fix these and call decide again:\n${checked.refused.map(one => `- ${one}`).join('\n')}`
+      return { deny: withReference(why, checked.refused.some(one => one.includes('picture'))) }
     }
     // A picture whose content runs past its stated height is refused once a browser has laid it out (issue 175);
     // a check that cannot run lets the picture through, since the pane draws it at its stated size either way.
@@ -3953,7 +3963,7 @@ export const register: Register = (on, _options) => {
     const skipped = unchecked.length === 0 ? '' : ` Not checked for overflow, so drawn at the height you stated: ${unchecked.join('; ')}.`
     // What would draw more is said, never refused (issue 180): the agent may call again with it drawn, and the newer call wins.
     const more = checked.notes.length === 0 ? '' : `\nTo show more, call decide again with these drawn:\n${checked.notes.map(one => `- ${one}`).join('\n')}`
-    return { result: `The Decision pane shows it when your turn ends. Ask your question in a sentence; the pane holds the case.${skipped}${more}` }
+    return { result: withReference(`The Decision pane shows it when your turn ends. Ask your question in a sentence; the pane holds the case.${skipped}${more}`, checked.notes.length > 0) }
   })
 
   on('tool.call', { tool: TASK_TOOL as typeof TOOL }, async ($, e) => {

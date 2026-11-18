@@ -151,13 +151,28 @@ export function boxlessWrapUp(json: string): 'partial' | { json: string | null; 
 /** An option as a button's label is matched: no case, no `(recommended)` the agent copied, no stops at its edges. */
 const optionKey = (option: string) => option.toLowerCase().replace(/\(recommended\)/g, '').replace(/^[\s.,;:!?*_`"']+|[\s.,;:!?*_`"']+$/g, '')
 
+/** The words a label is matched on: lowercase letters, digits and dots, no stop word. */
+const labelWords = (label: string) => new Set((optionKey(label).match(/[a-z0-9.]+/g) ?? []).filter(word => !LABEL_STOP.has(word)))
+const LABEL_STOP = new Set('a an and as at be by do for from in is it of on or the then this to with'.split(' '))
+
+/** The option sharing the most words with `label`, when one alone does; -1 when none shares any, or two tie. */
+function closestOption(options: readonly string[], label: string): number {
+  const words = labelWords(label)
+  const shared = options.map(option => [...labelWords(option)].filter(word => words.has(word)).length)
+  const most = Math.max(0, ...shared)
+  return most === 0 || shared.filter(n => n === most).length > 1 ? -1 : shared.indexOf(most)
+}
+
 /**
  * A deck decision whose options take the wrap-up buttons' own words, each relabelled so its send matches, in the
  * declaration's order so its cells, pages and recommendation still hold. The box holds at most two buttons, so a
  * declared option with no button keeps its own label and sends it. Null when a button names no declared option.
  */
 export function asButtons<D extends { options: readonly string[] }>(decision: D, actions: readonly string[]): D | null {
-  const matched = actions.map(label => decision.options.findIndex(option => optionKey(option) === optionKey(label)))
+  const exact = actions.map(label => decision.options.findIndex(option => optionKey(option) === optionKey(label)))
+  // An agent often shortens a button ("Leave as is" for "Leave the folder as is", issue 186): a button no option
+  // equals is the one option it shares the most words with, when exactly one option shares the most.
+  const matched = exact.map((i, b) => (i >= 0 ? i : closestOption(decision.options, actions[b]!)))
   if (matched.some(i => i < 0) || new Set(matched).size !== matched.length) return null
   const options = decision.options.map((option, i) => {
     const button = matched.indexOf(i)
@@ -220,67 +235,61 @@ const SHAPE =
   '"exemplar"?: string}], "risk": string, "fallback"?: string, ' +
   '"whyNot": [{"option": string, "line": string}] | string}]}'
 
-/** What the decide tool tells the agent, read on every turn: when to call it, the page shape, and how each field is checked. */
+/**
+ * How much of a tool's description the desktop hands the model: the rest is cut at a "… [truncated]" marker (issue 185,
+ * seen in a session on desktop 6.18355.0: the 11,987-character brief stopped after 4,096, so no session ever read how to
+ * draw, and 0 of 9 arguments were drawn). `DECIDE_DESCRIPTION` stays under it; the picture reference rides on replies.
+ */
+export const HOST_DESCRIPTION_CAP = 4096
+
+/** What the decide tool tells the agent, read on every turn: when to call it, the page shape, how each field is checked, and the cheap way to draw. */
 export const DECIDE_DESCRIPTION =
   'Show the person the decision you are asking them to make, in the Decision pane the band\'s reply row opens. Call it ' +
-  'once in any turn whose reply asks the person to choose between options or approve a step, before you end the turn ' +
-  `and before the end-of-turn box, with the options you offer there. It costs no model call. The input is ${SHAPE}. ` +
-  `headline: the question your options answer, in plain words, ${HEADLINE_WORDS} words or fewer, no technical term; ` +
-  'with three options, or two that are not a yes and a no, it asks which, never "Should I ...?". ask: the same ' +
-  'question in one sentence. options: the two or three you offer, short imperative labels, in your end-of-turn ' +
-  'buttons\' words (the box holds two). recommend: one option, exactly as written. pages: one per option, its option ' +
-  'as in options. The person opens the recommended page first and mostly decides there, so it carries the whole case. ' +
-  `what: one sentence (${WORDS.what} words) on what the option is, for a newcomer. dependsOn, on the recommended page ` +
-  'only: the fact the call hinges on, read "This depends on {on}; choose {otherwise} instead if {if}", otherwise ' +
-  `another option, on ${WORDS.dependsOn.on} words and if ${WORDS.dependsOn.if}. arguments: 1 to 4, strongest first, an observed source ahead of ` +
-  'an estimate or assumption; argue every option as ' +
-  'strongly as you honestly can, so its tab is a real second opinion (a "leave it" option may state its consequence ' +
-  `in one). claim: ${WORDS.claim} words. A claim about what a person sees (its verb shows, draws, renders, fits, ` +
-  'looks, appears or displays, or it names the desktop, the pane, the band, the phone or the screen) rests on a ' +
-  '"shot" of that surface or a "ruling"; a read or run is refused as proof of what a person sees. ' +
-  'rests is checked against this session; cite only what it read or ran: ' +
-  '"read" gives ref "path:12" or "path:12-18" of a file one of your tool calls opened, and its excerpt copied exactly ' +
-  'from those lines as the file reads now; "run" gives an excerpt exactly as one of your tool results printed it, and ' +
-  'ref naming the script or file it ran as a reader would know it (scripts/land.sh, not cat); "shot" gives ref, ' +
-  'the path of an image file this session captured or read (never image data), with crop and callout in its ' +
-  'pixels, the callout\'s label 4 words and its side the side of the point with empty space ("right" for a word at the end of a tab row; absent, above-right), the point then on that edge of what it marks (the right end of a word for "right") so the ring never covers it, and before, a fix\'s failing state at the same crop size; of a shot ' +
-  'scripts/desktop-shot.sh took, cite its <out>@2x.png, the full-resolution file, whose type draws sharp, never the ' +
-  'halved <out>.png; "ruling" quotes the person\'s own words from this session or a "## Rulings" comment you ' +
-  `read, its ref the issue it was ruled on ("issue 171") when there is one; "estimate" and "assumption" need no source and are shown as such. A shot with before needs a callout on the After marking what changed. excerpt: ${WORDS.excerpt} words. ` +
-  'Show rather than tell. The person has already read your reply, so the pane is for what the eye takes in at a ' +
-  'glance: draw every argument that rests on facts. Under each claim goes its exhibit, a shot or a picture of the ' +
-  'facts the claim rests on. The claim says what the facts mean; the picture carries them: the values, the order, ' +
-  'where, which, how much. Choose arguments you can draw: one with facts to draw beats one without. An estimate ' +
-  'draws like a measure, its figure labelled as estimated. An assumption with nothing to draw is the weakest ' +
-  'argument: swap it for one that rests on what you read or ran, or leave it out, since two drawn arguments beat ' +
-  'four with two in words. The quickest ' +
-  'drawings: numbers you read or ran, pass them as a table (picture {form, data, x, y}, below) and they are drawn ' +
-  'for you; a visible claim, a shot of that surface cropped to the part it names, with before for a fix; where a ' +
-  'thing sits or what waits on what, place-in-structure; which few of many, which-of-many; values against a line, ' +
-  'threshold; events in time, timeline; options that differ, the same small drawing on each page with the ' +
-  'difference marked. Geometry carries the fact, so take the words away and the drawing must still say something: ' +
-  'a row of word chips joined by "then" says nothing more than the sentence. Draw an order only when its steps ' +
-  'differ in something you can mark (time, size, who waits). A ruling is the person\'s own words: it stays their ' +
-  'quote, never drawn. An accepted call names each argument left undrawn and how to draw it: call decide again ' +
-  'with it drawn and the pane shows the new one. ' +
-  `picture: an HTML fragment laid out ${DESIGN_WIDTH} CSS pixels wide at the height you state (at most ${MAX_HEIGHT}), well-formed, of these ` +
-  `elements only: ${[...PASSIVE].join(', ')}; no event handler, no image file, nothing loaded from outside it. It draws with the Vantage Point ` +
-  'design system: compose freely, in the form the content needs, from its classes, and the stylesheet supplies the look. A picture carries ' +
-  'marks (the classes bar, track, dot, node, edge, head, tick, chip, ring, or svg shapes), with the words as their labels; text alone is ' +
-  `refused. At most one highlight, on the one figure the claim rests on; at most ${MAX_MARKS} marks; no class outside the vocabulary ` +
-  'unless the picture\'s own <style> defines it; colour only as these tokens, never a hex value: ' +
+  'once in any turn whose reply asks the person to choose or approve a step, before you end the turn, with the options ' +
+  `you offer there. Input: ${SHAPE}. ` +
+  `headline: the question, ${HEADLINE_WORDS} words or fewer, plain words; "Which ...?" unless the options are a yes and a no. ` +
+  'ask: the same question in one sentence. options: two or three short imperative labels, your end-of-turn buttons\' ' +
+  'words. recommend: one option, exactly as written. pages: one per option; the recommended page carries the whole case. ' +
+  `Each page: what (${WORDS.what} words, the option for a newcomer); dependsOn on the recommended page only, read "This ` +
+  `depends on {on}; choose {otherwise} instead if {if}" (otherwise another option; on ${WORDS.dependsOn.on} words, if ` +
+  `${WORDS.dependsOn.if}); arguments 1 to 4, strongest first; risk (${WORDS.risk} words); fallback (${WORDS.fallback}); ` +
+  'whyNot: on the recommended page [{"option", "line"}], a line per other option, on every other page one string; ' +
+  `${WORDS.whyNot} words a line. claim: ${WORDS.claim} words. rests is checked against this session: "read" ref "path:12-18" ` +
+  'of a file you opened, excerpt copied exactly from those lines; "run" excerpt exactly as a tool result printed it, ref ' +
+  'the script a reader knows; "shot" ref an image this session captured or read (desktop-shot.sh\'s <out>@2x.png), crop ' +
+  'and callout {x, y, label of 4 words, side} in its pixels, before for a fix; "ruling" excerpt the person\'s own words, ' +
+  `ref the issue; "estimate" and "assumption" need no source. excerpt: ${WORDS.excerpt} words. A claim about what a ` +
+  'person sees (shows, draws, renders, fits, looks, appears, displays, or it names the desktop, pane, band, phone or ' +
+  'screen) rests on a shot or a ruling. ' +
+  'Draw every argument that rests on facts: under each claim goes a picture of them, so the eye gets the case at a ' +
+  'glance. The easy way, enough on its own: put the numbers you read, ran or estimated in a table, picture {"form": ' +
+  '"bars", "data": [{"case": "today", "s": 3.06}, {"case": "cached", "s": 0.73}], "x": "case", "y": "s", "highlight": ' +
+  `"cached"}, and it is drawn for you. Forms: ${Object.entries(FORM_JOBS).map(([form, job]) => `${form}, ${job}`).join('; ')}. ` +
+  'A visible claim draws as its shot. Facts that are not numbers (where a thing sits, which few of many, events in ' +
+  `time) draw as picture {"html", "height"}, a fragment ${DESIGN_WIDTH}px wide from the design system's classes, whose ` +
+  'list and worked exemplars come back in this tool\'s reply. An estimate is drawn labelled estimated; swap an ' +
+  'assumption with nothing to draw for an observed argument. A ruling stays the person\'s quote. A field over its ' +
+  'words, a source that does not hold or a picture that breaks a rule is refused, each named with its repair, and ' +
+  'nothing shows until a call passes; an accepted call names each argument left undrawn, so call again with it drawn. ' +
+  'Your reply states the ask in a sentence; the pane holds the case.'
+
+/** How to draw a picture by hand: the reference the description has no room for, sent in decide's replies (issue 185). */
+export const PICTURE_REFERENCE =
+  `picture {"html", "height"}: an HTML fragment laid out ${DESIGN_WIDTH} CSS pixels wide at the height you state (at most ${MAX_HEIGHT}), well-formed, of these ` +
+  `elements only: ${[...PASSIVE].join(', ')}; no event handler, no image file, nothing loaded from outside it. Compose freely from the ` +
+  'design system\'s classes, and its stylesheet supplies the look. A picture carries marks (the classes bar, track, dot, node, edge, head, ' +
+  'tick, chip, ring, or svg shapes), with the words as their labels; text alone is refused. Geometry carries the fact: take the words away ' +
+  'and the drawing must still say something, so a row of word chips joined by "then" is no picture; draw an order only when its steps ' +
+  `differ in something you can mark. At most one highlight, on the figure the claim rests on; at most ${MAX_MARKS} marks; no class outside ` +
+  'the vocabulary unless the picture\'s own <style> defines it; colour only as these tokens, never a hex value: ' +
   `${Object.keys(TOKENS).map(name => `var(--${name})`).join(', ')}. Classes: ${Object.entries(CLASSES).map(([name, job]) => `${name} (${job})`).join('; ')}. ` +
   `Text is 13px, labels 12px, never smaller than ${MIN_TEXT_PX}px. Worked exemplars: ` +
   EXEMPLARS.slice(0, 3).map(one => `${one.id}, ${one.job}, height ${one.height}: ${one.html}`).join(' ') +
   ` Others to start from: ${EXEMPLARS.slice(3).map(one => `${one.id} (${one.job})`).join('; ')}; name the one you start from in the argument's exemplar. ` +
-  `For a table of numbers, pass picture as {form, data, x, y, highlight?} instead and it is drawn for you: ` +
-  `${Object.entries(FORM_JOBS).map(([form, job]) => `${form}, ${job}`).join('; ')}; x names the label column, y the numeric one, highlight one row's x. ` +
-  'A refusal names the rule, its count and the repair: mend the picture and call again. ' +
-  `risk: what could go wrong (${WORDS.risk} words); fallback: what you would do then ` +
-  `(${WORDS.fallback}). whyNot: on the recommended page [{"option", "line"}], a line per other option on why it lost; ` +
-  `elsewhere one line on why this option was not recommended (${WORDS.whyNot} words a line). A field over its words, ` +
-  'a source that does not hold or a picture that breaks a rule is refused, each named, and nothing shows until a ' +
-  'call passes. The pane holds the case: your reply states the ask in a sentence and does not repeat the arguments.'
+  `A table: {form, data, x, y, highlight?}, x the label column, y the numeric one (or several for line and sparks), highlight one row's x. ` +
+  'A shot: cite its full-resolution file (scripts/desktop-shot.sh writes <out>@2x.png; never the halved <out>.png), crop it to the part the ' +
+  'claim names, and set the callout\'s side to the side of the point with empty space ("right" for a word at the end of a tab row; absent, ' +
+  'above-right), the point on that edge of what it marks so the ring never covers it. A shot with before needs a callout on the After marking what changed.'
 
 /** A declaration the pane can draw, with what would draw more of it, each by its path; or every field to fix. */
 export type Declared = { decision: Decision; notes: string[] } | { refused: string[] }
