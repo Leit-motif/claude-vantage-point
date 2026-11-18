@@ -216,7 +216,10 @@ const FETCH_INTO = `  case $kind in
  * clean where a JPEG rang (#124); past them, the same ladder on a copy three quarters
  * as wide. Each AVIF is encoded from a copy cropped to even sides: sips tiles a
  * picture wider than 512px into a grid, and Chromium paints a grid with an odd side
- * fully transparent (#130). `$1` is the cache name, `$2` to `$4` the strip's top,
+ * fully transparent (#130). Every file other runs read (the cached PNG, its padded
+ * copy, a strip's copy) is written under this run's own name and moved into place, so
+ * strips fetched at once, or by other sessions, never read one half-written (issue 180).
+ * `$1` is the cache name, `$2` to `$4` the strip's top,
  * rows and most, `$5` the kind, the rest its arguments: a file's path and its `wide`. The gh token stays inside the
  * shell.
  */
@@ -232,10 +235,12 @@ if [ ! -s "$out" ]; then
   rm -f "$dir/$name".strip-*.copy "$dir/$name.padded.png"
   tmp=$(mktemp "$dir/.fetch.XXXXXX") || exit 3
   ok=1
-${FETCH_INTO}  if [ $ok -ne 0 ] || ! sips -s format png "$tmp" --out "$out" >/dev/null 2>&1; then rm -f "$tmp" "$out"; exit 4; fi
+${FETCH_INTO}  full="$tmp.png"
+  if [ $ok -ne 0 ] || ! sips -s format png "$tmp" --out "$full" >/dev/null 2>&1; then rm -f "$tmp" "$full"; exit 4; fi
   rm -f "$tmp"
-  set -- $(size "$out")
-  if [ "$1" -gt "$wide" ]; then sips --resampleWidth "$wide" "$out" >/dev/null 2>&1; fi
+  set -- $(size "$full")
+  if [ "$1" -gt "$wide" ]; then sips --resampleWidth "$wide" "$full" >/dev/null 2>&1; fi
+  mv -f "$full" "$out" || { rm -f "$full"; exit 3; }
 fi
 set -- $(size "$out"); w=$1; h=$2
 echo "$out"
@@ -252,13 +257,16 @@ if [ ! -s "$view" ]; then
     # sips crops from the centre when the crop starts on the first row, and not at all when it ends on the last,
     # so the strip is cut from a copy with a row of padding above and below (measured against exact crops, #136).
     padded="$dir/$name.padded.png"
-    [ -s "$padded" ] || sips --padToHeightWidth $((h + 2)) "$w" "$out" --out "$padded" >/dev/null 2>&1 || exit 3
+    if [ ! -s "$padded" ]; then
+      pad="$dir/.padded.$$.png"
+      sips --padToHeightWidth $((h + 2)) "$w" "$out" --out "$pad" >/dev/null 2>&1 && mv -f "$pad" "$padded" || { rm -f "$pad"; exit 3; }
+    fi
     sips -c "$rows" "$w" --cropOffset $((top + 1)) 0 "$padded" --out "$page" >/dev/null 2>&1 || exit 3
   fi
   cp "$page" "$src" || exit 3
   cw=$w; found=1
   while [ $cw -ge 200 ]; do
-    if [ "$(wc -c < "$src")" -le $most ]; then cp "$src" "$view"; found=0; break; fi
+    if [ "$(wc -c < "$src")" -le $most ]; then cp "$src" "$try" && mv -f "$try" "$view" && found=0; break; fi
     set -- $(size "$src")
     if [ $(($1 % 2 + $2 % 2)) -gt 0 ]; then sips -c $(($2 - $2 % 2)) $(($1 - $1 % 2)) "$src" >/dev/null 2>&1 || break; fi
     for q in 85 70 50; do
