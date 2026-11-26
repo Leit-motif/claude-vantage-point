@@ -4,7 +4,7 @@
 
 A heads-up display for Claude Code. See what your agents are doing, turn their questions into clear choices, and answer what they need from you across your projects, without leaving the session you're in.
 
-Claude Code desktop app · macOS and Windows · Open source · Early preview
+Claude Code desktop app · macOS and Windows · Open source
 
 ![The reply row lights above the Claude Code prompt with the agent's question, the recommended option green; the decision deck opens with each option as a page of diagrams; pressing the option sends it as the reply](media/demo.gif)
 
@@ -108,7 +108,7 @@ Vantage Point runs inside Claude Code on your machine. It has no server of its o
 
 - **macOS and Windows.** On Windows a picture on a card draws only when it is small and not tall, else Open shows it, and a video's Play button shows no length: macOS's image and audio tools, which shrink a picture and read a film's length, have no Windows counterpart. Without Git for Windows, pictures and the caches of long sessions do not load.
 - **Drawn in the desktop app.** The band, panes and reader draw in the desktop app's Code tab. Cloud sessions on claude.ai draw no mods.
-- **Early preview.** Vantage Point is 0.x, so its formats may still change, and Claude Code's mod API is early access and changes between releases.
+- **Still 0.x.** Its formats may still change, and Claude Code's mod API is early access and changes between releases.
 - **Your workflow, as it is.** Vantage Point reads Matt Pocock's triage labels and follows his states, under your repository's own names when its `docs/agents/triage-labels.md` renames them, and never changes that setup. Where your repository works differently, with other labels, branch names or decision-record folders, the tour's **Your workflow** stop proposes the difference for you to rule on ([conventions](#conventions)).
 - **Your own repositories.** Asks and counts come only from repositories the signed-in `gh` account owns. Organization repositories stay out by design, for trust and to stay within GitHub's search limits; the frontier still works inside one.
 - **Keep warm needs the session running.** A session can only refresh its own cache, so Keep warm holds while the desktop app runs that session.
